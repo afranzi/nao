@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -385,25 +384,19 @@ class NaoConfig(BaseModel):
         content: str,
         extra_env: dict[str, str] | None = None,
     ) -> tuple[str, dict[str, str | None]]:
-        """Support both ${{ env('VAR') }} and {{ env('VAR') }} formats.
-        Returns:
-            Tuple of (processed_content, env_var_status) where env_var_status maps
-            env var names to their values (None if not set or empty)
+        """Resolve ``env``, ``aws`` and ``k8s`` secret references in *content*.
+
+        Supported forms:
+            ``${{ env('VAR') }}`` / ``{{ env('VAR') }}``
+            ``{{ aws('secret_name/field') }}``
+            ``{{ k8s('namespace/secret/field') }}``
+
+        Returns the processed content and a map of missing references (env only;
+        ``aws`` / ``k8s`` raise on failure).
         """
-        regex = re.compile(r"\$?\{\{\s*env\(['\"]([^'\"]+)['\"]\)\s*\}\}")
-        env_vars: dict[str, str | None] = {}
+        from nao_core.config.secrets import process_secrets
 
-        def replacer(match: re.Match[str]) -> str:
-            env_var = match.group(1)
-            if extra_env is not None and env_var in extra_env:
-                value = extra_env[env_var]
-            else:
-                value = os.environ.get(env_var)
-            env_vars[env_var] = value if value else None
-            return value or ""
-
-        processed = regex.sub(replacer, content)
-        return processed, env_vars
+        return process_secrets(content, extra_env=extra_env)
 
 
 def resolve_project_path() -> Path:

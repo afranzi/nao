@@ -70,6 +70,10 @@ ollama = ["ollama>=0.4.0"]
 # Integrations
 notion = ["notion-client>=2.7.0", "notion2md>=2.9.0"]
 
+# Secret resolution backends
+aws-secrets = ["boto3>=1.34.0"]
+k8s-secrets = ["kubernetes>=29.0.0"]
+
 # Convenience groups
 all-databases = [
     "nao-core[postgres,bigquery,snowflake,duckdb,clickhouse,databricks,mysql,mssql,athena,trino,redshift,fabric]",

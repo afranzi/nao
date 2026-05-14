@@ -328,8 +328,13 @@ def generate_markdown() -> str:
         "[`cli/nao_core/config/`](https://github.com/getnao/nao/tree/main/cli/nao_core/config).\n"
     )
     parts.append(
-        "Values wrapped in `${{ env('VAR') }}` or `{{ env('VAR') }}` are resolved "
-        "from environment variables at load time.\n"
+        "Values can pull secrets from external sources at load time using "
+        "`{{ <protocol>('<identifier>') }}` (the `${{ ... }}` form is also accepted):\n\n"
+        "- `{{ env('VAR') }}` — environment variable\n"
+        "- `{{ aws('secret_name/field') }}` — AWS Secrets Manager (JSON payload); "
+        "ARN form is also supported. Requires `pip install 'nao-core[aws-secrets]'`.\n"
+        "- `{{ k8s('namespace/secret/field') }}` — Kubernetes Secret; namespace "
+        "defaults to the pod namespace when omitted. Requires `pip install 'nao-core[k8s-secrets]'`.\n"
     )
 
     # Top-level
