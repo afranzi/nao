@@ -2,15 +2,26 @@
 
 Supports template-style references that are substituted before YAML parsing:
 
-    {{ env('VAR_NAME') }}                 # OS environment variable
-    {{ aws('secret_name/field') }}        # AWS Secrets Manager (JSON payload)
-    {{ k8s('namespace/secret/field') }}   # Kubernetes Secret
+    {{ env('VAR_NAME') }}                        # OS environment variable
+    {{ aws('secret_name/path.to.field') }}       # AWS Secrets Manager (JSON payload, glom path)
+    {{ k8s('namespace/secret/field') }}          # Kubernetes Secret
 
 Each reference resolves to a string. ``env`` follows the long-standing lenient
 behaviour (missing variables become empty strings and are reported as warnings
 during config validation); ``aws`` and ``k8s`` raise ``ValueError`` on failure
 so the user gets an immediate, actionable error rather than a confusing
 downstream pydantic validation message.
+
+AWS payloads are JSON; the part after the first ``/`` is a glom path, so
+nested fields are addressed with dot-notation::
+
+    secret payload: {"port": 5432, "cred": {"user": "potato"}}
+    aws('id/port')           → "5432"
+    aws('id/cred.user')      → "potato"
+
+When the same secret is referenced more than once in a single config load,
+the underlying AWS / k8s call is made only once -- the parsed payload is
+cached for the duration of :func:`process_secrets`.
 """
 
 from __future__ import annotations
@@ -19,6 +30,7 @@ import base64
 import json
 import os
 import re
+from typing import Any
 
 from nao_core.deps import require_dependency
 
@@ -27,6 +39,10 @@ _TEMPLATE_REGEX = re.compile(r"\$?\{\{\s*(?P<protocol>env|aws|k8s)\(\s*['\"](?P<
 _AWS_ARN_REGION_REGEX = re.compile(r"^arn:aws:secretsmanager:(?P<region>[\w-]+):")
 
 _K8S_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+_SCALAR_TYPES = (str, int, float, bool)
+
+SecretCache = dict[tuple[str, str], Any]
 
 
 def process_secrets(
@@ -38,8 +54,12 @@ def process_secrets(
     Returns the rendered content and a map of references that resolved to
     ``None``. Only ``env`` can produce missing entries; ``aws`` and ``k8s``
     raise ``ValueError`` instead of silently substituting empty strings.
+
+    Repeated references to the same AWS / k8s secret hit the backend once;
+    subsequent references reuse the cached payload.
     """
     missing: dict[str, str | None] = {}
+    cache: SecretCache = {}
 
     def replacer(match: re.Match[str]) -> str:
         protocol = match.group("protocol")
@@ -53,12 +73,11 @@ def process_secrets(
             return value
 
         if protocol == "aws":
-            return resolve_aws(identifier)
+            return resolve_aws(identifier, cache=cache)
 
-        if protocol == "k8s":
-            return resolve_k8s(identifier)
-
-        raise ValueError(f"Unsupported secret protocol: '{protocol}'")
+        # The regex restricts protocols to (env|aws|k8s); anything else is a bug.
+        assert protocol == "k8s", f"Unexpected protocol: {protocol!r}"
+        return resolve_k8s(identifier, cache=cache)
 
     return _TEMPLATE_REGEX.sub(replacer, content), missing
 
@@ -72,21 +91,45 @@ def resolve_env(identifier: str, extra_env: dict[str, str] | None = None) -> str
     return value or None
 
 
-def resolve_aws(identifier: str) -> str:
-    """Fetch a field from an AWS Secrets Manager JSON secret.
+def resolve_aws(identifier: str, cache: SecretCache | None = None) -> str:
+    """Fetch a (possibly nested) field from an AWS Secrets Manager JSON secret.
 
     Identifier formats:
-        ``secret_name/field``
+        ``secret_name/field``                       — top-level JSON key
+        ``secret_name/nested.field.path``           — glom dot-path
         ``arn:aws:secretsmanager:<region>:<account>:secret:<name>/field``
     """
+    secret_name, field_path = _split_aws_identifier(identifier)
+    payload = _load_aws_payload(secret_name, cache=cache)
+    return _extract_scalar(payload, field_path, source=f"AWS secret '{secret_name}'")
+
+
+def resolve_k8s(identifier: str, cache: SecretCache | None = None) -> str:
+    """Fetch a field from a Kubernetes Secret.
+
+    Identifier formats:
+        ``secret_name/field``                  (uses the pod namespace)
+        ``namespace/secret_name/field``        (explicit namespace)
+    """
+    namespace, secret_name, field = _split_k8s_identifier(identifier)
+    data = _load_k8s_data(namespace, secret_name, cache=cache)
+    if field not in data:
+        raise ValueError(f"Kubernetes secret '{namespace}/{secret_name}' has no field '{field}'")
+    return base64.b64decode(data[field]).decode("utf-8")
+
+
+def _load_aws_payload(secret_name: str, cache: SecretCache | None) -> dict[str, Any]:
+    key = ("aws", secret_name)
+    if cache is not None and key in cache:
+        return cache[key]
+
     require_dependency("boto3", "aws-secrets", "for AWS Secrets Manager resolution")
     import boto3
     from botocore.exceptions import ClientError
 
-    secret_name, field = _split_aws_identifier(identifier)
     region = _aws_region_from_arn(secret_name)
-
     client = boto3.session.Session(region_name=region).client(service_name="secretsmanager")
+
     try:
         response = client.get_secret_value(SecretId=secret_name)
     except ClientError as e:
@@ -94,42 +137,59 @@ def resolve_aws(identifier: str) -> str:
 
     secret_str = response.get("SecretString")
     if not secret_str:
-        raise ValueError(f"AWS secret '{secret_name}' has no SecretString payload")
+        raise ValueError(f"AWS secret '{secret_name}' has no SecretString payload (binary secrets are not supported)")
 
     try:
         payload = json.loads(secret_str)
     except json.JSONDecodeError as e:
         raise ValueError(f"AWS secret '{secret_name}' is not valid JSON: {e}") from e
 
-    if not isinstance(payload, dict) or field not in payload:
-        raise ValueError(f"AWS secret '{secret_name}' has no field '{field}'")
+    if not isinstance(payload, dict):
+        raise ValueError(f"AWS secret '{secret_name}' payload is not a JSON object")
 
-    return str(payload[field])
+    if cache is not None:
+        cache[key] = payload
+    return payload
 
 
-def resolve_k8s(identifier: str) -> str:
-    """Fetch a field from a Kubernetes Secret.
+def _load_k8s_data(namespace: str, secret_name: str, cache: SecretCache | None) -> dict[str, str]:
+    key = ("k8s", f"{namespace}/{secret_name}")
+    if cache is not None and key in cache:
+        return cache[key]
 
-    Identifier formats:
-        ``secret_name/field``                  (uses the pod namespace)
-        ``namespace/secret_name/field``        (explicit namespace)
-    """
     require_dependency("kubernetes", "k8s-secrets", "for Kubernetes Secret resolution")
     from kubernetes import client as kube_client
 
-    namespace, secret_name, field = _split_k8s_identifier(identifier)
     _load_kube_config()
-
     try:
         secret = kube_client.CoreV1Api().read_namespaced_secret(name=secret_name, namespace=namespace)
     except Exception as e:
         raise ValueError(f"Failed to load Kubernetes secret '{namespace}/{secret_name}': {e}") from e
 
     data = secret.data or {}
-    if field not in data:
-        raise ValueError(f"Kubernetes secret '{namespace}/{secret_name}' has no field '{field}'")
+    if cache is not None:
+        cache[key] = data
+    return data
 
-    return base64.b64decode(data[field]).decode("utf-8")
+
+def _extract_scalar(payload: dict[str, Any], path: str, *, source: str) -> str:
+    """Extract a scalar value from *payload* via a glom dot-path."""
+    require_dependency("glom", "aws-secrets", "for nested AWS secret field extraction")
+    from glom import Coalesce, glom
+
+    sentinel = object()
+    value = glom(payload, Coalesce(path, default=sentinel))
+
+    if value is sentinel:
+        raise ValueError(f"{source} has no field '{path}'")
+
+    if not isinstance(value, _SCALAR_TYPES):
+        raise ValueError(
+            f"{source} field '{path}' must be a scalar (got {type(value).__name__}); "
+            "wrap nested objects in their own secret or pick a leaf field"
+        )
+
+    return str(value)
 
 
 def _split_aws_identifier(identifier: str) -> tuple[str, str]:

@@ -1,5 +1,7 @@
 import base64
 import os
+import sys
+from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -53,7 +55,10 @@ def test_process_secrets_tracks_missing_env():
 def test_process_secrets_dispatches_to_aws_resolver():
     with patch.object(secrets, "resolve_aws", return_value="s3cr3t") as mock_aws:
         rendered, missing = secrets.process_secrets("password: {{ aws('db/password') }}")
-    mock_aws.assert_called_once_with("db/password")
+    mock_aws.assert_called_once()
+    args, kwargs = mock_aws.call_args
+    assert args[0] == "db/password"
+    assert "cache" in kwargs
     assert rendered == "password: s3cr3t"
     assert missing == {}
 
@@ -61,7 +66,8 @@ def test_process_secrets_dispatches_to_aws_resolver():
 def test_process_secrets_dispatches_to_k8s_resolver():
     with patch.object(secrets, "resolve_k8s", return_value="kv") as mock_k8s:
         rendered, missing = secrets.process_secrets("token: {{ k8s('ns/sec/field') }}")
-    mock_k8s.assert_called_once_with("ns/sec/field")
+    mock_k8s.assert_called_once()
+    assert mock_k8s.call_args.args[0] == "ns/sec/field"
     assert rendered == "token: kv"
     assert missing == {}
 
@@ -90,6 +96,13 @@ def test_process_secrets_mixed_protocols_in_one_document():
     assert missing == {}
 
 
+def test_process_secrets_handles_mixed_missing_and_present_env_vars():
+    with patch.dict(os.environ, {"PRESENT": "yes"}, clear=True):
+        rendered, missing = secrets.process_secrets("a: {{ env('PRESENT') }}, b: {{ env('ABSENT') }}")
+    assert rendered == "a: yes, b: "
+    assert missing == {"ABSENT": None}
+
+
 # ---------------------------------------------------------------------------
 # AWS identifier parsing
 # ---------------------------------------------------------------------------
@@ -102,6 +115,11 @@ def test_split_aws_identifier_simple_form():
 def test_split_aws_identifier_arn_form():
     arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-AbCdEf"
     assert secrets._split_aws_identifier(f"{arn}/password") == (arn, "password")
+
+
+def test_split_aws_identifier_preserves_dot_path_after_slash():
+    # The slash separates secret_name from glom path; dots inside the path stay intact.
+    assert secrets._split_aws_identifier("name/cred.user") == ("name", "cred.user")
 
 
 def test_split_aws_identifier_rejects_missing_slash():
@@ -157,24 +175,31 @@ def test_pod_namespace_falls_back_to_default(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _install_fake_boto3(monkeypatch, secret_string: str | None) -> MagicMock:
+@dataclass
+class _AwsMocks:
+    boto3: MagicMock
+    session: MagicMock
+    client: MagicMock
+
+
+def _install_fake_boto3(monkeypatch, secret_string: str | None) -> _AwsMocks:
     fake_client = MagicMock()
     fake_client.get_secret_value.return_value = {"SecretString": secret_string}
+
     fake_session = MagicMock()
     fake_session.client.return_value = fake_client
+
     fake_boto3 = MagicMock()
     fake_boto3.session.Session.return_value = fake_session
 
     fake_botocore_exceptions = MagicMock()
     fake_botocore_exceptions.ClientError = Exception
 
-    import sys
-
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exceptions)
     monkeypatch.setattr(secrets, "require_dependency", lambda *a, **kw: None)
-    return fake_client
+    return _AwsMocks(boto3=fake_boto3, session=fake_session, client=fake_client)
 
 
 def test_resolve_aws_returns_field_from_json_payload(monkeypatch):
@@ -182,9 +207,31 @@ def test_resolve_aws_returns_field_from_json_payload(monkeypatch):
     assert secrets.resolve_aws("my_secret/password") == "p"
 
 
+def test_resolve_aws_extracts_nested_field_via_glom(monkeypatch):
+    _install_fake_boto3(monkeypatch, '{"port": 5432, "cred": {"user": "potato"}}')
+    assert secrets.resolve_aws("my_secret/cred.user") == "potato"
+
+
+def test_resolve_aws_returns_scalar_int_as_string(monkeypatch):
+    _install_fake_boto3(monkeypatch, '{"port": 5432}')
+    assert secrets.resolve_aws("my_secret/port") == "5432"
+
+
+def test_resolve_aws_rejects_nested_object_as_value(monkeypatch):
+    _install_fake_boto3(monkeypatch, '{"cred": {"user": "x"}}')
+    with pytest.raises(ValueError, match="must be a scalar"):
+        secrets.resolve_aws("my_secret/cred")
+
+
 def test_resolve_aws_raises_when_payload_is_not_json(monkeypatch):
     _install_fake_boto3(monkeypatch, "not-json")
     with pytest.raises(ValueError, match="not valid JSON"):
+        secrets.resolve_aws("my_secret/password")
+
+
+def test_resolve_aws_raises_when_payload_is_not_an_object(monkeypatch):
+    _install_fake_boto3(monkeypatch, '"a string"')
+    with pytest.raises(ValueError, match="not a JSON object"):
         secrets.resolve_aws("my_secret/password")
 
 
@@ -201,15 +248,34 @@ def test_resolve_aws_raises_when_secret_string_is_empty(monkeypatch):
 
 
 def test_resolve_aws_uses_region_from_arn(monkeypatch):
-    fake_client = _install_fake_boto3(monkeypatch, '{"x": "y"}')
+    mocks = _install_fake_boto3(monkeypatch, '{"x": "y"}')
     arn = "arn:aws:secretsmanager:eu-west-3:111122223333:secret:foo-AbCdEf"
+
     secrets.resolve_aws(f"{arn}/x")
 
-    import sys
+    mocks.boto3.session.Session.assert_called_once_with(region_name="eu-west-3")
+    mocks.client.get_secret_value.assert_called_once_with(SecretId=arn)
 
-    fake_boto3 = sys.modules["boto3"]
-    fake_boto3.session.Session.assert_called_once_with(region_name="eu-west-3")
-    fake_client.get_secret_value.assert_called_once_with(SecretId=arn)
+
+def test_resolve_aws_caches_repeated_requests_to_same_secret(monkeypatch):
+    mocks = _install_fake_boto3(monkeypatch, '{"user": "u", "password": "p"}')
+    cache: secrets.SecretCache = {}
+
+    assert secrets.resolve_aws("my_secret/user", cache=cache) == "u"
+    assert secrets.resolve_aws("my_secret/password", cache=cache) == "p"
+
+    mocks.client.get_secret_value.assert_called_once_with(SecretId="my_secret")
+
+
+def test_process_secrets_caches_aws_calls_within_one_document(monkeypatch):
+    mocks = _install_fake_boto3(monkeypatch, '{"user": "u", "password": "p", "port": 5432}')
+
+    rendered, _ = secrets.process_secrets(
+        "user: {{ aws('db/user') }}\n" "password: {{ aws('db/password') }}\n" "port: {{ aws('db/port') }}\n"
+    )
+
+    assert rendered == "user: u\npassword: p\nport: 5432\n"
+    assert mocks.client.get_secret_value.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +283,13 @@ def test_resolve_aws_uses_region_from_arn(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _install_fake_kubernetes(monkeypatch, data: dict[str, str] | None) -> MagicMock:
+@dataclass
+class _K8sMocks:
+    kubernetes: MagicMock
+    v1: MagicMock
+
+
+def _install_fake_kubernetes(monkeypatch, data: dict[str, str] | None) -> _K8sMocks:
     secret_obj = MagicMock()
     secret_obj.data = data
 
@@ -233,14 +305,12 @@ def _install_fake_kubernetes(monkeypatch, data: dict[str, str] | None) -> MagicM
     fake_kubernetes.client = fake_client_module
     fake_kubernetes.config = fake_config_module
 
-    import sys
-
     monkeypatch.setitem(sys.modules, "kubernetes", fake_kubernetes)
     monkeypatch.setitem(sys.modules, "kubernetes.client", fake_client_module)
     monkeypatch.setitem(sys.modules, "kubernetes.config", fake_config_module)
     monkeypatch.setattr(secrets, "require_dependency", lambda *a, **kw: None)
     monkeypatch.setattr(secrets, "_load_kube_config", lambda: None)
-    return fake_v1
+    return _K8sMocks(kubernetes=fake_kubernetes, v1=fake_v1)
 
 
 def test_resolve_k8s_returns_base64_decoded_field(monkeypatch):
@@ -259,8 +329,20 @@ def test_resolve_k8s_raises_when_field_missing(monkeypatch):
 
 def test_resolve_k8s_uses_pod_namespace_when_omitted(monkeypatch):
     encoded = base64.b64encode(b"v").decode()
-    fake_v1 = _install_fake_kubernetes(monkeypatch, {"f": encoded})
+    mocks = _install_fake_kubernetes(monkeypatch, {"f": encoded})
     monkeypatch.setattr(secrets, "_pod_namespace", lambda: "my-ns")
 
     secrets.resolve_k8s("db/f")
-    fake_v1.read_namespaced_secret.assert_called_once_with(name="db", namespace="my-ns")
+    mocks.v1.read_namespaced_secret.assert_called_once_with(name="db", namespace="my-ns")
+
+
+def test_resolve_k8s_caches_repeated_requests_to_same_secret(monkeypatch):
+    encoded_user = base64.b64encode(b"u").decode()
+    encoded_pw = base64.b64encode(b"p").decode()
+    mocks = _install_fake_kubernetes(monkeypatch, {"user": encoded_user, "password": encoded_pw})
+    cache: secrets.SecretCache = {}
+
+    assert secrets.resolve_k8s("default/db/user", cache=cache) == "u"
+    assert secrets.resolve_k8s("default/db/password", cache=cache) == "p"
+
+    mocks.v1.read_namespaced_secret.assert_called_once_with(name="db", namespace="default")
