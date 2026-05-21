@@ -1,3 +1,4 @@
+import type { McpChartEmbedStoredConfig } from '@nao/shared';
 import type { CitationData, LlmProvider } from '@nao/shared/types';
 import { BUDGET_PERIODS, SHARE_VISIBILITY, USER_ROLES } from '@nao/shared/types';
 import { type ProviderMetadata } from 'ai';
@@ -5,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import { check, index, integer, primaryKey, sqliteTable, text, unique, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 import { AgentSettings } from '../types/agent-settings';
+import { AUTOMATION_RUN_STATUSES, AutomationIntegrationConfig, AutomationIntegrationResult } from '../types/automation';
 import { ForkMetadata, StopReason, ToolState, UIMessagePartType } from '../types/chat';
 import { LLM_INFERENCE_TYPES } from '../types/llm';
 import { LOG_LEVELS, LOG_SOURCES } from '../types/log';
@@ -377,6 +379,21 @@ export const projectLlmConfig = sqliteTable(
 		apiKey: text('api_key').notNull(),
 		credentials: text('credentials', { mode: 'json' }).$type<Record<string, string>>(),
 		enabledModels: text('enabled_models', { mode: 'json' }).$type<string[]>().default([]).notNull(),
+		customModels: text('custom_models', { mode: 'json' })
+			.$type<
+				{
+					id: string;
+					displayName?: string;
+					costPerM?: {
+						inputNoCache?: number;
+						inputCacheRead?: number;
+						inputCacheWrite?: number;
+						output?: number;
+					};
+				}[]
+			>()
+			.default([])
+			.notNull(),
 		baseUrl: text('base_url'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
@@ -511,6 +528,71 @@ export const projectSavedPrompt = sqliteTable(
 	(t) => [index('project_saved_prompt_projectId_idx').on(t.projectId)],
 );
 
+export const automation = sqliteTable(
+	'automation',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		scheduledJobId: text('scheduled_job_id').references(() => scheduledJob.id, { onDelete: 'set null' }),
+		title: text('title').notNull(),
+		prompt: text('prompt').notNull(),
+		scheduleDescription: text('schedule_description'),
+		timezone: text('timezone'),
+		modelProvider: text('model_provider').$type<LlmProvider>(),
+		modelId: text('model_id'),
+		mcpEnabled: integer('mcp_enabled', { mode: 'boolean' }).default(true).notNull(),
+		mcpServers: text('mcp_servers', { mode: 'json' }).$type<string[]>(),
+		integrations: text('integrations', { mode: 'json' }).$type<AutomationIntegrationConfig>().notNull().default({}),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(t) => [
+		index('automation_projectId_idx').on(t.projectId),
+		index('automation_userId_idx').on(t.userId),
+		index('automation_scheduledJobId_idx').on(t.scheduledJobId),
+	],
+);
+
+export const automationRun = sqliteTable(
+	'automation_run',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		automationId: text('automation_id')
+			.notNull()
+			.references(() => automation.id, { onDelete: 'cascade' }),
+		chatId: text('chat_id').references(() => chat.id, { onDelete: 'set null' }),
+		status: text('status', { enum: AUTOMATION_RUN_STATUSES }).notNull().default('running'),
+		startedAt: integer('started_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+		completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+		errorMessage: text('error_message'),
+		integrationResults: text('integration_results', { mode: 'json' })
+			.$type<AutomationIntegrationResult[]>()
+			.notNull()
+			.default([]),
+	},
+	(t) => [
+		index('automation_run_automationId_idx').on(t.automationId),
+		index('automation_run_chatId_idx').on(t.chatId),
+		index('automation_run_status_idx').on(t.status),
+	],
+);
+
 export const STORY_ACTIONS = ['create', 'update', 'replace'] as const;
 export const STORY_SOURCES = ['assistant', 'user'] as const;
 
@@ -571,6 +653,44 @@ export const storyVersion = sqliteTable(
 		index('story_version_storyId_idx').on(t.storyId),
 		unique('story_version_story_version_unique').on(t.storyId, t.version),
 	],
+);
+
+export const mcpQueryData = sqliteTable(
+	'mcp_query_data',
+	{
+		queryId: text('query_id').primaryKey(),
+		callLogId: text('call_log_id'),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		sourceChatId: text('source_chat_id'),
+		columns: text('columns', { mode: 'json' }).$type<string[]>().notNull(),
+		data: text('data', { mode: 'json' }).$type<Record<string, unknown>[]>().notNull(),
+		expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('mcp_query_data_project_id_idx').on(t.projectId),
+		index('mcp_query_data_callLogId_idx').on(t.callLogId),
+	],
+);
+
+export const mcpChartEmbed = sqliteTable(
+	'mcp_chart_embed',
+	{
+		chartEmbedId: text('chart_embed_id').primaryKey(),
+		queryId: text('query_id')
+			.notNull()
+			.references(() => mcpQueryData.queryId, { onDelete: 'cascade' }),
+		chartConfig: text('chart_config', { mode: 'json' }).$type<McpChartEmbedStoredConfig>().notNull(),
+		sourceChatId: text('source_chat_id'),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [index('mcp_chart_embed_query_id_idx').on(t.queryId)],
 );
 
 export const storyDataCache = sqliteTable('story_data_cache', {
@@ -730,7 +850,7 @@ export const scheduledJob = sqliteTable(
 		payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>(),
 		runAt: integer('run_at', { mode: 'timestamp_ms' }).notNull(),
 		cron: text('cron'),
-		status: text('status', { enum: ['pending', 'running', 'failed'] })
+		status: text('status', { enum: ['pending', 'running', 'failed', 'paused'] })
 			.notNull()
 			.default('pending'),
 		attempts: integer('attempts').notNull().default(0),

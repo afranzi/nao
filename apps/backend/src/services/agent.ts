@@ -11,6 +11,8 @@ import {
 	ModelMessage,
 	Output,
 	pruneMessages,
+	stepCountIs,
+	type StopCondition,
 	StreamTextResult,
 	ToolLoopAgent,
 	UIMessageStreamWriter,
@@ -80,7 +82,35 @@ export interface AgentRunResult {
 
 export type AgentChat = Pick<DBChat, 'id' | 'projectId' | 'userId'> & {
 	forkMetadata?: ForkMetadata | null;
+	testMode?: boolean;
 };
+
+export async function buildToolContext(opts: {
+	projectId: string;
+	userId: string;
+	chatId: string;
+	agentSettings?: AgentSettings | null;
+}): Promise<ToolContext> {
+	const project = await projectQueries.retrieveProjectById(opts.projectId);
+	if (!project.path) {
+		throw new HandlerError('BAD_REQUEST', 'Project path does not exist.');
+	}
+	const agentSettings =
+		opts.agentSettings !== undefined ? opts.agentSettings : await projectQueries.getAgentSettings(opts.projectId);
+	const [envVars, azureAccessToken] = await Promise.all([
+		projectQueries.getEnvVars(opts.projectId),
+		hasFeature(LICENSE_FEATURES.sso).then((has) => (has ? getAzureAccessTokenForUser(opts.userId) : null)),
+	]);
+	return {
+		projectFolder: project.path,
+		chatId: opts.chatId,
+		agentSettings,
+		envVars,
+		azureAccessToken,
+		queryResults: new Map(),
+		generatedArtifacts: { charts: [], stories: [] },
+	};
+}
 
 export class AgentService {
 	private _agents = new Map<string, AgentManager>();
@@ -90,7 +120,22 @@ export class AgentService {
 		await assertBudgetNotExceeded(projectId, resolved.provider);
 	}
 
-	async create(chat: AgentChat, modelSelection?: LlmSelectedModel): Promise<AgentManager> {
+	async create(
+		chat: AgentChat,
+		modelSelection?: LlmSelectedModel,
+		options: {
+			extraTools?: Record<string, unknown>;
+			mcpEnabled?: boolean;
+			mcpServers?: string[] | null;
+			/**
+			 * Removes `suggest_follow_ups` and switches the loop's stop condition
+			 * to a step counter. Used by non-interactive runs (e.g. automations)
+			 * where suggesting follow-ups would prematurely end the loop
+			 * before outbound integration tools fire.
+			 */
+			excludeFollowUps?: boolean;
+		} = {},
+	): Promise<AgentManager> {
 		this._disposeAgent(chat.id);
 		const resolvedLlmSelectedModel = await this._getResolvedLlmSelectedModel(chat.projectId, modelSelection);
 		await assertBudgetNotExceeded(chat.projectId, resolvedLlmSelectedModel.provider);
@@ -98,7 +143,18 @@ export class AgentService {
 		const agentSettings = await projectQueries.getAgentSettings(chat.projectId);
 		const toolContext = await this._getToolContext(chat.projectId, chat.id, chat.userId, agentSettings);
 		const webTools = await this._resolveWebTools(chat.projectId, resolvedLlmSelectedModel.provider, agentSettings);
-		const agentTools = getTools(agentSettings, webTools ?? undefined);
+		const extraTools = { ...(webTools ?? {}), ...(options.extraTools ?? {}) };
+		const agentTools = getTools(agentSettings, extraTools, {
+			testMode: chat.testMode,
+			mcpEnabled: options.mcpEnabled,
+			mcpServers: options.mcpServers,
+			excludeFollowUps: options.excludeFollowUps,
+		});
+		const stopWhen: StopCondition<AgentTools>[] = options.excludeFollowUps
+			? [stepCountIs(20)]
+			: chat.testMode
+				? [hasToolCall('suggest_follow_ups')]
+				: [hasToolCall('suggest_follow_ups'), hasToolCall('clarification')];
 		const agent = new AgentManager(
 			chat,
 			modelConfig,
@@ -107,6 +163,7 @@ export class AgentService {
 			new AbortController(),
 			agentTools,
 			toolContext,
+			stopWhen,
 		);
 		this._agents.set(chat.id, agent);
 		return agent;
@@ -145,22 +202,7 @@ export class AgentService {
 		userId: string,
 		agentSettings: AgentSettings | null,
 	): Promise<ToolContext> {
-		const project = await projectQueries.retrieveProjectById(projectId);
-		if (!project.path) {
-			throw new HandlerError('BAD_REQUEST', 'Project path does not exist.');
-		}
-		const envVars = await projectQueries.getEnvVars(projectId);
-		const azureAccessToken = (await hasFeature(LICENSE_FEATURES.sso))
-			? await getAzureAccessTokenForUser(userId)
-			: null;
-		return {
-			projectFolder: project.path ?? '',
-			chatId,
-			agentSettings,
-			envVars,
-			azureAccessToken,
-			queryResults: new Map(),
-		};
+		return buildToolContext({ projectId, userId, chatId, agentSettings });
 	}
 
 	private _disposeAgent(chatId: string): void {
@@ -214,6 +256,7 @@ class AgentManager {
 		private readonly _abortController: AbortController,
 		private readonly _agentTools: AgentTools,
 		private readonly _toolContext: ToolContext,
+		stopWhen: StopCondition<AgentTools>[] = [hasToolCall('suggest_follow_ups'), hasToolCall('clarification')],
 	) {
 		this._agent = new ToolLoopAgent({
 			model: this._modelConfig.model,
@@ -221,7 +264,7 @@ class AgentManager {
 			tools: this._agentTools,
 			maxOutputTokens: MAX_OUTPUT_TOKENS,
 			prepareStep: async ({ messages }) => this._prepareStep(messages),
-			stopWhen: [hasToolCall('suggest_follow_ups'), hasToolCall('clarification')],
+			stopWhen,
 			experimental_context: this._toolContext,
 		});
 	}
@@ -361,7 +404,9 @@ class AgentManager {
 		const userRules = getUserRules(this._toolContext.projectFolder);
 		const connections = getConnections(this._toolContext.projectFolder);
 		const skills = skillService.getSkills();
-		const basePrompt = renderToMarkdown(SystemPrompt({ memories, userRules, connections, skills, timezone }));
+		const basePrompt = renderToMarkdown(
+			SystemPrompt({ memories, userRules, connections, skills, timezone, testMode: this.chat.testMode }),
+		);
 		const renderedPrompt = provider
 			? renderToMarkdown(MessagingProviderSystemPrompt({ basePrompt, provider, chatUrl }))
 			: basePrompt;
@@ -537,9 +582,22 @@ class AgentManager {
 		}
 	}
 
-	async generate(uiMessages: UIMessage[]): Promise<AgentRunResult> {
+	async generate(
+		uiMessages: UIMessage[],
+		opts: {
+			provider?: Provider;
+			timezone?: string;
+			chatUrl?: string;
+		} = {},
+	): Promise<AgentRunResult> {
 		const startTime = performance.now();
-		const messages = await this._buildModelMessages(uiMessages);
+		const messages = await this._buildModelMessages(
+			uiMessages,
+			undefined,
+			opts.provider,
+			opts.timezone,
+			opts.chatUrl,
+		);
 		try {
 			const result = await this._agent.generate({
 				messages,
@@ -548,7 +606,16 @@ class AgentManager {
 			const durationMs = Math.round(performance.now() - startTime);
 
 			const usage = convertToTokenUsage(result.totalUsage);
-			const cost = convertToCost(usage, this._modelSelection.provider, this._modelSelection.modelId);
+			const customModels = await llmConfigQueries
+				.getProjectLlmConfigByProvider(this.chat.projectId, this._modelSelection.provider)
+				.then((c) => c?.customModels ?? [])
+				.catch(() => []);
+			const cost = convertToCost(
+				usage,
+				this._modelSelection.provider,
+				this._modelSelection.modelId,
+				customModels,
+			);
 			const finishReason = result.finishReason ?? 'stop';
 
 			return {
@@ -650,14 +717,18 @@ class AgentManager {
 
 	/**
 	 * Add Anthropic cache breakpoints to messages.
-	 * No-op for non-Anthropic providers.
+	 * Applies to the `anthropic` provider and to Claude models accessed via `vertex`
+	 * (which uses @ai-sdk/google-vertex/anthropic and reads the same `anthropic` provider options).
 	 *
 	 * Cache strategy:
 	 * - System message: 1h TTL (instructions rarely change)
 	 * - Last message: 5m TTL (current step's leaf for agentic caching)
 	 */
 	private _addCache(messages: ModelMessage[]): ModelMessage[] {
-		if (messages.length === 0 || this._modelSelection.provider !== 'anthropic') {
+		const { provider, modelId } = this._modelSelection;
+		const isAnthropicCompatible =
+			provider === 'anthropic' || (provider === 'vertex' && modelId.startsWith('claude-'));
+		if (messages.length === 0 || !isAnthropicCompatible) {
 			return messages;
 		}
 

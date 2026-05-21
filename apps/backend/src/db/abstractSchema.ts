@@ -45,6 +45,11 @@ export type NewOrgMember = typeof sqliteSchema.orgMember.$inferInsert;
 export type DBProjectSavedPrompt = typeof sqliteSchema.projectSavedPrompt.$inferSelect;
 export type NewProjectSavedPrompt = typeof sqliteSchema.projectSavedPrompt.$inferInsert;
 
+export type DBAutomation = typeof sqliteSchema.automation.$inferSelect;
+export type NewAutomation = typeof sqliteSchema.automation.$inferInsert;
+export type DBAutomationRun = typeof sqliteSchema.automationRun.$inferSelect;
+export type NewAutomationRun = typeof sqliteSchema.automationRun.$inferInsert;
+
 export type DBMemory = typeof sqliteSchema.memories.$inferSelect;
 export type DBNewMemory = typeof sqliteSchema.memories.$inferInsert;
 
@@ -84,6 +89,12 @@ export type NewLog = typeof sqliteSchema.log.$inferInsert;
 
 export type DBMcpCallLog = typeof sqliteSchema.mcpCallLog.$inferSelect;
 export type NewMcpCallLog = typeof sqliteSchema.mcpCallLog.$inferInsert;
+
+export type DBMcpQueryData = typeof sqliteSchema.mcpQueryData.$inferSelect;
+export type NewMcpQueryData = typeof sqliteSchema.mcpQueryData.$inferInsert;
+
+export type DBMcpChartEmbed = typeof sqliteSchema.mcpChartEmbed.$inferSelect;
+export type NewMcpChartEmbed = typeof sqliteSchema.mcpChartEmbed.$inferInsert;
 
 export type DBMessageImage = typeof sqliteSchema.messageImage.$inferSelect;
 export type NewMessageImage = typeof sqliteSchema.messageImage.$inferInsert;
