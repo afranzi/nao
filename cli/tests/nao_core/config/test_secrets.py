@@ -88,9 +88,7 @@ def test_process_secrets_mixed_protocols_in_one_document():
         patch.object(secrets, "resolve_k8s", return_value="k8stok"),
     ):
         rendered, missing = secrets.process_secrets(
-            "host: {{ env('DB_HOST') }}\n"
-            "password: {{ aws('db/password') }}\n"
-            "token: {{ k8s('default/api/token') }}\n"
+            "host: {{ env('DB_HOST') }}\npassword: {{ aws('db/password') }}\ntoken: {{ k8s('default/api/token') }}\n"
         )
     assert rendered == "host: localhost\npassword: awspw\ntoken: k8stok\n"
     assert missing == {}
@@ -271,7 +269,7 @@ def test_process_secrets_caches_aws_calls_within_one_document(monkeypatch):
     mocks = _install_fake_boto3(monkeypatch, '{"user": "u", "password": "p", "port": 5432}')
 
     rendered, _ = secrets.process_secrets(
-        "user: {{ aws('db/user') }}\n" "password: {{ aws('db/password') }}\n" "port: {{ aws('db/port') }}\n"
+        "user: {{ aws('db/user') }}\npassword: {{ aws('db/password') }}\nport: {{ aws('db/port') }}\n"
     )
 
     assert rendered == "user: u\npassword: p\nport: 5432\n"
