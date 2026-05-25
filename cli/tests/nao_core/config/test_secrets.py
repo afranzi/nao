@@ -192,6 +192,7 @@ def _install_fake_boto3(monkeypatch, secret_string: str | None) -> _AwsMocks:
 
     fake_botocore_exceptions = MagicMock()
     fake_botocore_exceptions.ClientError = Exception
+    fake_botocore_exceptions.BotoCoreError = Exception
 
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
@@ -243,6 +244,21 @@ def test_resolve_aws_raises_when_secret_string_is_empty(monkeypatch):
     _install_fake_boto3(monkeypatch, None)
     with pytest.raises(ValueError, match="no SecretString payload"):
         secrets.resolve_aws("my_secret/password")
+
+
+def test_resolve_aws_wraps_botocore_errors_as_value_error(monkeypatch):
+    """Non-ClientError boto3 exceptions (e.g. NoCredentialsError) must also surface as ValueError."""
+
+    class _FakeNoCredentialsError(Exception):
+        pass
+
+    mocks = _install_fake_boto3(monkeypatch, '{"x": "y"}')
+    # BotoCoreError is the base class for client-side failures like NoCredentialsError / EndpointConnectionError.
+    sys.modules["botocore.exceptions"].BotoCoreError = _FakeNoCredentialsError
+    mocks.client.get_secret_value.side_effect = _FakeNoCredentialsError("Unable to locate credentials")
+
+    with pytest.raises(ValueError, match="Failed to load AWS secret 'my_secret'"):
+        secrets.resolve_aws("my_secret/x")
 
 
 def test_resolve_aws_uses_region_from_arn(monkeypatch):

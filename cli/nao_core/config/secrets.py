@@ -125,14 +125,13 @@ def _load_aws_payload(secret_name: str, cache: SecretCache | None) -> dict[str, 
 
     require_dependency("boto3", "aws-secrets", "for AWS Secrets Manager resolution")
     import boto3
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import BotoCoreError, ClientError
 
     region = _aws_region_from_arn(secret_name)
-    client = boto3.session.Session(region_name=region).client(service_name="secretsmanager")
-
     try:
+        client = boto3.session.Session(region_name=region).client(service_name="secretsmanager")
         response = client.get_secret_value(SecretId=secret_name)
-    except ClientError as e:
+    except (BotoCoreError, ClientError) as e:
         raise ValueError(f"Failed to load AWS secret '{secret_name}': {e}") from e
 
     secret_str = response.get("SecretString")
