@@ -2628,7 +2628,7 @@ snowflake = [
     { name = "snowflake-connector-python", extra = ["secure-local-storage"] },
 ]
 
-= [
+starrocks = [
     { name = "mysql-connector-python" },
 ]
 trino = [
