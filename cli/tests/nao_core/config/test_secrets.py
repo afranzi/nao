@@ -178,6 +178,7 @@ class _AwsMocks:
     boto3: MagicMock
     session: MagicMock
     client: MagicMock
+    botocore_exceptions: MagicMock
 
 
 def _install_fake_boto3(monkeypatch, secret_string: str | None) -> _AwsMocks:
@@ -198,7 +199,12 @@ def _install_fake_boto3(monkeypatch, secret_string: str | None) -> _AwsMocks:
     monkeypatch.setitem(sys.modules, "botocore", MagicMock())
     monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exceptions)
     monkeypatch.setattr(secrets, "require_dependency", lambda *a, **kw: None)
-    return _AwsMocks(boto3=fake_boto3, session=fake_session, client=fake_client)
+    return _AwsMocks(
+        boto3=fake_boto3,
+        session=fake_session,
+        client=fake_client,
+        botocore_exceptions=fake_botocore_exceptions,
+    )
 
 
 def test_resolve_aws_returns_field_from_json_payload(monkeypatch):
@@ -254,7 +260,7 @@ def test_resolve_aws_wraps_botocore_errors_as_value_error(monkeypatch):
 
     mocks = _install_fake_boto3(monkeypatch, '{"x": "y"}')
     # BotoCoreError is the base class for client-side failures like NoCredentialsError / EndpointConnectionError.
-    sys.modules["botocore.exceptions"].BotoCoreError = _FakeNoCredentialsError
+    mocks.botocore_exceptions.BotoCoreError = _FakeNoCredentialsError
     mocks.client.get_secret_value.side_effect = _FakeNoCredentialsError("Unable to locate credentials")
 
     with pytest.raises(ValueError, match="Failed to load AWS secret 'my_secret'"):
