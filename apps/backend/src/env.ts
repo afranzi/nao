@@ -166,6 +166,16 @@ const envSchema = z.object({
 		.optional()
 		.transform((val) => val?.trim() || undefined),
 
+	/**
+	 * Default for the MCP endpoint toggle (Settings > MCP Endpoint) while a project has no stored
+	 * settings — lets a deployment come up with the endpoint already enabled. Once an admin saves
+	 * the settings, the stored value wins and this is ignored.
+	 */
+	MCP_ENDPOINT_ENABLED: z
+		.enum(['true', 'false'])
+		.optional()
+		.transform((val) => (val === undefined ? undefined : val === 'true')),
+
 	POSTHOG_KEY: z.string().optional(),
 	POSTHOG_HOST: z.url({ message: 'POSTHOG_HOST must be a valid URL' }).optional(),
 	POSTHOG_DISABLED: z
