@@ -181,6 +181,10 @@ config:
 #    the same env var keys (BETTER_AUTH_SECRET, DB_URI, provider API keys, ...).
 #    Useful with GitOps (ArgoCD/Flux), where plaintext helm values would land in
 #    the rendered Application manifests, and with external secret operators.
+#    NOTE: the pod-template checksum only tracks the chart-rendered Secret, so
+#    rotating an external Secret does NOT restart pods — pair it with a rollout
+#    trigger (e.g. stakater/reloader, ESO's templated annotations) or run
+#    `kubectl rollout restart` after rotation.
 existingSecret: ""
 
 # -- Extra env vars appended verbatim to the nao container (list of
