@@ -276,6 +276,32 @@ service:
   annotations: {}
 
 # =============================================================================
+# Ingress
+# =============================================================================
+
+# -- Expose nao through an Ingress controller. Remember to set
+#    config.betterAuthUrl (and the OAuth redirect URIs of your SSO provider)
+#    to the public URL served by the ingress.
+ingress:
+  enabled: false
+  # -- IngressClass name (e.g. nginx, traefik, alb)
+  className: ""
+  # -- Controller-specific annotations (cert-manager issuer, ALB scheme, ...),
+  #    merged on top of commonAnnotations
+  annotations: {}
+  hosts:
+    - host: nao.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration; reference a pre-existing certificate Secret or let
+  #    cert-manager populate it via annotations
+  tls: []
+  #  - secretName: nao-tls
+  #    hosts:
+  #      - nao.example.com
+
+# =============================================================================
 # Resources
 # =============================================================================
 resources:

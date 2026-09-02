@@ -1,0 +1,45 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "nao.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nao.labels" . | nindent 4 }}
+  {{- $ann := dict }}
+  {{- with include "nao.annotations" . }}
+    {{- with . }}
+      {{- $ann = merge $ann (fromYaml .) }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.ingress.annotations }}
+    {{- $ann = merge . $ann }}
+  {{- end }}
+  {{- with $ann }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "nao.fullname" $ }}
+                port:
+                  number: {{ $.Values.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}
