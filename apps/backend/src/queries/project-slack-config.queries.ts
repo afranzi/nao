@@ -168,6 +168,8 @@ export const updateProjectSlackModel = async (
 					slackTransportMode: existing?.slackTransportMode ?? 'webhook',
 					slackAppToken: existing?.slackAppToken ?? '',
 					slackReplyMode: toSlackReplyMode(existing?.slackReplyMode),
+					// A model change edits a UI-managed field; credential ownership is untouched.
+					slackSettingsSource: existing?.slackSettingsSource,
 				},
 			})
 			.where(eq(s.project.id, projectId))
