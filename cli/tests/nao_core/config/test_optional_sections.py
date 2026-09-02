@@ -49,14 +49,15 @@ def test_strict_load_still_fails_on_unresolved_llm_secret(tmp_path):
 
 def test_invalid_llm_and_slack_are_dropped_with_flag(tmp_path):
     write_config(tmp_path, VALID_CORE + LLM_WITH_ENV_KEY + SLACK_WITH_ENV_TOKENS)
-    for var in (
-        "TEST_OPTIONAL_SECTIONS_ANTHROPIC_KEY",
-        "TEST_OPTIONAL_SECTIONS_SLACK_BOT",
-        "TEST_OPTIONAL_SECTIONS_SLACK_SECRET",
-    ):
-        os.environ.pop(var, None)
+    with patch.dict(os.environ):
+        for var in (
+            "TEST_OPTIONAL_SECTIONS_ANTHROPIC_KEY",
+            "TEST_OPTIONAL_SECTIONS_SLACK_BOT",
+            "TEST_OPTIONAL_SECTIONS_SLACK_SECRET",
+        ):
+            os.environ.pop(var, None)
 
-    config = NaoConfig.load(tmp_path, drop_invalid_optional_sections=True)
+        config = NaoConfig.load(tmp_path, drop_invalid_optional_sections=True)
 
     assert config.llm is None
     assert config.slack is None
@@ -84,18 +85,20 @@ databases:
 """
         + LLM_WITH_ENV_KEY,
     )
-    os.environ.pop("TEST_OPTIONAL_SECTIONS_ANTHROPIC_KEY", None)
-    with pytest.raises((ValidationError, ValueError)):
-        NaoConfig.load(tmp_path, drop_invalid_optional_sections=True)
+    with patch.dict(os.environ):
+        os.environ.pop("TEST_OPTIONAL_SECTIONS_ANTHROPIC_KEY", None)
+        with pytest.raises((ValidationError, ValueError)):
+            NaoConfig.load(tmp_path, drop_invalid_optional_sections=True)
 
 
 def test_try_load_passes_the_flag_through(tmp_path):
     write_config(tmp_path, VALID_CORE + LLM_WITH_ENV_KEY)
-    os.environ.pop("TEST_OPTIONAL_SECTIONS_ANTHROPIC_KEY", None)
+    with patch.dict(os.environ):
+        os.environ.pop("TEST_OPTIONAL_SECTIONS_ANTHROPIC_KEY", None)
 
-    strict = NaoConfig.try_load(tmp_path)
-    assert strict is None
+        strict = NaoConfig.try_load(tmp_path)
+        assert strict is None
 
-    lenient = NaoConfig.try_load(tmp_path, drop_invalid_optional_sections=True)
-    assert lenient is not None
-    assert lenient.llm is None
+        lenient = NaoConfig.try_load(tmp_path, drop_invalid_optional_sections=True)
+        assert lenient is not None
+        assert lenient.llm is None
