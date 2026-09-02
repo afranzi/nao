@@ -130,6 +130,7 @@ export const applySlackTransportSettings = async (data: {
 					slackSigningSecret: data.signingSecret,
 					slackTransportMode: data.transportMode,
 					slackAppToken: data.appToken,
+					slackSettingsSource: 'env',
 					slackllmProvider: existing?.slackllmProvider ?? '',
 					slackllmModelId: existing?.slackllmModelId ?? '',
 					autoCreateUsersEnabled: existing?.autoCreateUsersEnabled ?? false,

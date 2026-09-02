@@ -227,7 +227,7 @@ const baseEnvSchema = z.object({
 
 const envSchema = baseEnvSchema.superRefine((data, ctx) => {
 	if (!data.SLACK_BOT_TOKEN) {
-		if (data.SLACK_APP_TOKEN || data.SLACK_TRANSPORT_MODE) {
+		if (data.SLACK_SIGNING_SECRET || data.SLACK_APP_TOKEN || data.SLACK_TRANSPORT_MODE) {
 			ctx.addIssue({
 				code: 'custom',
 				path: ['SLACK_BOT_TOKEN'],

@@ -53,6 +53,10 @@ export type SlackSettings = {
 	slackTransportMode?: SlackTransportMode;
 	slackAppToken?: string;
 	slackReplyMode?: SlackReplyMode;
+	// 'env' when the boot-time SLACK_* seed wrote the credentials; absent after a
+	// Settings > Slack save, which hands ownership back to the UI so the seed
+	// stops overwriting.
+	slackSettingsSource?: 'env';
 };
 
 export type TeamsSettings = {

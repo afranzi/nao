@@ -6,9 +6,11 @@ import { logger } from '../utils/logger';
 
 /**
  * Seed the default project's Slack settings from SLACK_* env vars on boot, so a deployment can
- * declare its Slack integration instead of pasting tokens into Settings > Slack. The env owns the
- * credential and transport fields while its variables are set; UI-managed fields (model selection,
- * reply mode, auto-created users) are preserved. Never throws — Slack must not block startup.
+ * declare its Slack integration instead of pasting tokens into Settings > Slack. The seed only
+ * writes when the settings are absent or were written by a previous seed — a config saved through
+ * the UI is never overwritten, so deployments that already export SLACK_* for nao_config.yaml
+ * templating keep their existing setup on upgrade. UI-managed fields (model selection, reply mode,
+ * auto-created users) are preserved either way. Never throws — Slack must not block startup.
  */
 export async function seedSlackConfigFromEnv(): Promise<boolean> {
 	if (!env.SLACK_BOT_TOKEN) {
@@ -24,8 +26,17 @@ export async function seedSlackConfigFromEnv(): Promise<boolean> {
 			return false;
 		}
 
+		const settings = project.slackSettings;
+		if (settings && settings.slackSettingsSource !== 'env') {
+			logger.info(
+				'SLACK_* env vars are set but the Slack settings were saved through the UI; leaving them untouched (delete them in Settings > Slack to hand ownership to the environment)',
+				{ source: 'system', context: { projectId: project.id } },
+			);
+			return false;
+		}
+
 		const transportMode = envSlackTransportMode();
-		if (matchesEnv(project.slackSettings, transportMode)) {
+		if (matchesEnv(settings, transportMode)) {
 			return false;
 		}
 
@@ -57,6 +68,7 @@ type StoredSlackSettings = {
 	slackSigningSecret?: string;
 	slackAppToken?: string;
 	slackTransportMode?: string;
+	slackSettingsSource?: string;
 } | null;
 
 function matchesEnv(settings: StoredSlackSettings, transportMode: SlackTransportMode): boolean {
