@@ -19,8 +19,10 @@ else:
     try:
         from posthog import Posthog
     except ImportError:
-        # posthog<3 has no Posthog client class (dbt toolchains commonly pin
-        # posthog<3, e.g. elementary-data). Tracking degrades to a no-op.
+        # Some pinned posthog versions lack the Posthog client class (the
+        # relaxed floor exists because dbt toolchains commonly pin posthog<3,
+        # e.g. elementary-data — 2.5+ still works). Tracking degrades to a
+        # no-op when the class is unavailable.
         Posthog = None
 
 from nao_core import __version__
