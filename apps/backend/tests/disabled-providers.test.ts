@@ -64,6 +64,15 @@ describe('DISABLED_PROVIDERS', () => {
 		__reloadEnvForTesting();
 	});
 
+	it('rejects malformed named-instance ids', () => {
+		process.env.DISABLED_PROVIDERS = 'openaiCompatible/Bad_Name';
+		expect(() => __reloadEnvForTesting()).toThrow(/DISABLED_PROVIDERS/);
+		process.env.DISABLED_PROVIDERS = 'anthropic/some-name';
+		expect(() => __reloadEnvForTesting()).toThrow(/DISABLED_PROVIDERS/);
+		delete process.env.DISABLED_PROVIDERS;
+		__reloadEnvForTesting();
+	});
+
 	it('disabling a kind covers its named instances, and an instance can be disabled alone', () => {
 		setDisabledProviders('openaiCompatible');
 		expect(isProviderDisabled('openaiCompatible/my-vllm')).toBe(true);

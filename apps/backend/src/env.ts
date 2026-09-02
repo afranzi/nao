@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 
-import { LLM_PROVIDERS, NAMED_PROVIDER_KIND } from '@nao/shared/types';
+import { isLlmProvider, LLM_PROVIDERS, NAMED_PROVIDER_KIND } from '@nao/shared/types';
 import dotenv from 'dotenv';
 import { z } from 'zod/v4';
 
@@ -189,17 +189,9 @@ const envSchema = z.object({
 				.map((entry) => entry.trim())
 				.filter(Boolean),
 		)
-		.refine(
-			(providers) =>
-				providers.every(
-					(provider) =>
-						(LLM_PROVIDERS as readonly string[]).includes(provider) ||
-						provider.startsWith(`${NAMED_PROVIDER_KIND}/`),
-				),
-			{
-				message: `DISABLED_PROVIDERS must be a comma-separated list of provider kinds (${LLM_PROVIDERS.join(', ')}) or named instances (${NAMED_PROVIDER_KIND}/<name>)`,
-			},
-		),
+		.refine((providers) => providers.every(isLlmProvider), {
+			message: `DISABLED_PROVIDERS must be a comma-separated list of provider kinds (${LLM_PROVIDERS.join(', ')}) or named instances (${NAMED_PROVIDER_KIND}/<name>)`,
+		}),
 
 	LANGFUSE_PUBLIC_KEY: z
 		.string()
