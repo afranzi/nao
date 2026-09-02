@@ -1,4 +1,7 @@
 {{- if .Values.ingress.enabled -}}
+{{- if not .Values.ingress.hosts }}
+{{- fail "ingress.enabled=true requires at least one entry in ingress.hosts" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -29,6 +32,9 @@ spec:
   {{- end }}
   rules:
     {{- range .Values.ingress.hosts }}
+    {{- if not .paths }}
+    {{- fail (printf "ingress host %q needs at least one entry in paths" .host) }}
+    {{- end }}
     - host: {{ .host | quote }}
       http:
         paths:
