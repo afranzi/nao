@@ -71,7 +71,7 @@ export function updateAuth() {
 	openIdConfigMetadataPromise = null;
 }
 
-export async function verifyOAuthAccessToken(token: string, audience: string | string[]): Promise<JWTPayload> {
+export async function verifyOAuthAccessToken(token: string, audience: string[]): Promise<JWTPayload> {
 	const { issuer, jwksUrl } = await getAuthServerEndpoints();
 	return verifyAccessToken(token, {
 		verifyOptions: { audience, issuer },
