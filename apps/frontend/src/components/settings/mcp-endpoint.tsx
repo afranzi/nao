@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronLeft, ChevronRight, Copy, Plus, Trash2 } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
@@ -10,6 +10,7 @@ import { SettingsCard } from '@/components/ui/settings-card';
 import { SettingsToggleRow } from '@/components/ui/settings-toggle-row';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useIsCloud } from '@/hooks/use-nao-mode';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/main';
 
@@ -444,8 +445,11 @@ function CopyButton({ text }: { text: string }) {
 type CreatedClient = { clientId: string; clientSecret: string | null };
 
 function OAuthClientsCard() {
+	const isCloud = useIsCloud();
 	const queryClient = useQueryClient();
-	const clientsQuery = useQuery(trpc.mcpOAuthClients.list.queryOptions());
+	// OAuth clients are deployment-wide (no per-workspace scoping), so this is self-hosted only —
+	// the backend enforces the same restriction.
+	const clientsQuery = useQuery({ ...trpc.mcpOAuthClients.list.queryOptions(), enabled: !isCloud });
 	const listKey = trpc.mcpOAuthClients.list.queryOptions().queryKey;
 
 	const [addOpen, setAddOpen] = useState(false);
@@ -475,6 +479,10 @@ function OAuthClientsCard() {
 
 	const clients = clientsQuery.data ?? [];
 
+	if (isCloud) {
+		return null;
+	}
+
 	return (
 		<SettingsCard
 			title='Connected apps'
@@ -487,7 +495,11 @@ function OAuthClientsCard() {
 				</Button>
 			</div>
 
-			{clients.length === 0 ? (
+			{clientsQuery.isLoading ? (
+				<p className='text-sm text-muted-foreground text-center py-4'>Loading…</p>
+			) : clientsQuery.isError ? (
+				<p className='text-sm text-destructive text-center py-4'>Failed to load OAuth clients.</p>
+			) : clients.length === 0 ? (
 				<p className='text-sm text-muted-foreground text-center py-4'>No OAuth clients yet.</p>
 			) : (
 				<Table>
@@ -530,6 +542,7 @@ function OAuthClientsCard() {
 				onOpenChange={setAddOpen}
 				onCreate={(input) => createMutation.mutate(input)}
 				pending={createMutation.isPending}
+				error={createMutation.error?.message ?? null}
 			/>
 
 			<CreatedClientDialog created={created} onOpenChange={(open) => !open && setCreated(null)} />
@@ -541,6 +554,7 @@ function OAuthClientsCard() {
 				description='Apps using this client will immediately lose access to the MCP endpoint. This cannot be undone.'
 				confirmLabel='Delete'
 				isPending={deleteMutation.isPending}
+				error={deleteMutation.error?.message}
 				onConfirm={() => {
 					if (deleteClientId) {
 						deleteMutation.mutate({ clientId: deleteClientId });
@@ -556,15 +570,27 @@ function AddClientDialog({
 	onOpenChange,
 	onCreate,
 	pending,
+	error,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onCreate: (input: { name: string; redirectUris: string[]; confidential: boolean }) => void;
 	pending: boolean;
+	error: string | null;
 }) {
 	const [name, setName] = useState('');
 	const [redirectUri, setRedirectUri] = useState('');
 	const [confidential, setConfidential] = useState(true);
+
+	// Reset once the dialog is closed (the parent closes it only on success), so a fresh open never
+	// shows the previous client's values. Inputs are kept while it stays open — e.g. after an error.
+	useEffect(() => {
+		if (!open) {
+			setName('');
+			setRedirectUri('');
+			setConfidential(true);
+		}
+	}, [open]);
 
 	const canSubmit = name.trim().length > 0 && redirectUri.trim().length > 0 && !pending;
 
@@ -573,9 +599,6 @@ function AddClientDialog({
 			return;
 		}
 		onCreate({ name: name.trim(), redirectUris: [redirectUri.trim()], confidential });
-		setName('');
-		setRedirectUri('');
-		setConfidential(true);
 	};
 
 	return (
@@ -613,13 +636,21 @@ function AddClientDialog({
 					</div>
 					<div className='flex items-center justify-between'>
 						<div>
-							<p className='text-sm font-medium text-foreground'>Confidential client</p>
+							<label htmlFor='oauth-client-confidential' className='text-sm font-medium text-foreground'>
+								Confidential client
+							</label>
 							<p className='text-xs text-muted-foreground'>
 								Issues a client secret (server-to-server). Turn off for PKCE-only public clients.
 							</p>
 						</div>
-						<Switch checked={confidential} onCheckedChange={setConfidential} />
+						<Switch
+							id='oauth-client-confidential'
+							checked={confidential}
+							onCheckedChange={setConfidential}
+						/>
 					</div>
+
+					{error && <p className='text-sm text-destructive'>{error}</p>}
 				</div>
 
 				<div className='flex justify-end gap-2'>

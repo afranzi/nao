@@ -551,6 +551,9 @@ export const settingsSearchIndex: SettingsSearchEntry[] = [
 		title: 'Connected apps',
 		description: 'Create and manage the OAuth clients external MCP tools use to connect (client id + secret).',
 		keywords: ['oauth', 'client', 'client id', 'client secret', 'connected apps', 'dust', 'static oauth', 'mcp'],
+		// Admin-only card, self-hosted only (OAuth clients are deployment-wide).
+		adminOrContextAdmin: true,
+		cloudHidden: true,
 	},
 	{
 		page: '/settings/project/integrations',

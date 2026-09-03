@@ -101,9 +101,13 @@ describe('mcpOAuthClients router', () => {
 		);
 	});
 
-	it('deletes a client by id', async () => {
-		await caller().mcpOAuthClients.delete({ clientId: 'c1' });
+	it('deletes a client by id and returns it', async () => {
+		const result = await caller().mcpOAuthClients.delete({ clientId: 'c1' });
+		expect(result).toEqual({ clientId: 'c1' });
+		// Called once with a where condition (drizzle eq(), an opaque SQL object — the returned id
+		// mirrors the requested client, confirming the handler targets it).
 		expect(testState.deleteWhere).toHaveBeenCalledTimes(1);
+		expect(testState.deleteWhere.mock.calls[0][0]).toBeDefined();
 	});
 
 	it('rejects non-admins', async () => {

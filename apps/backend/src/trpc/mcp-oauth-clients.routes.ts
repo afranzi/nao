@@ -5,7 +5,24 @@ import { z } from 'zod/v4';
 import { getAuth } from '../auth';
 import s from '../db/abstractSchema';
 import { db } from '../db/db';
+import { isCloud } from '../env';
 import { adminProtectedProcedure, router } from './trpc';
+
+/**
+ * OAuth clients live in a single, deployment-wide table (better-auth has no per-workspace scoping),
+ * so managing them is restricted to self-hosted deployments — where "the deployment" is the
+ * workspace. In multi-tenant cloud a project admin must not enumerate or delete clients other
+ * projects rely on.
+ */
+const selfHostedAdminProcedure = adminProtectedProcedure.use(async ({ next }) => {
+	if (isCloud) {
+		throw new TRPCError({
+			code: 'FORBIDDEN',
+			message: 'MCP OAuth client management is only available on self-hosted deployments.',
+		});
+	}
+	return next();
+});
 
 /**
  * Admin management of the OAuth clients that external MCP consumers (Claude, Cursor, dust.tt, …)
@@ -14,7 +31,7 @@ import { adminProtectedProcedure, router } from './trpc';
  * returned once and never stored or listed afterwards.
  */
 export const mcpOAuthClientsRoutes = router({
-	list: adminProtectedProcedure.query(async () => {
+	list: selfHostedAdminProcedure.query(async () => {
 		const rows = await db
 			.select({
 				clientId: s.oauthClient.clientId,
@@ -37,7 +54,7 @@ export const mcpOAuthClientsRoutes = router({
 		}));
 	}),
 
-	create: adminProtectedProcedure
+	create: selfHostedAdminProcedure
 		.input(
 			z.object({
 				name: z.string().min(1).max(200),
@@ -77,7 +94,7 @@ export const mcpOAuthClientsRoutes = router({
 			return { clientId: created.client_id, clientSecret: created.client_secret ?? null };
 		}),
 
-	delete: adminProtectedProcedure.input(z.object({ clientId: z.string().min(1) })).mutation(async ({ input }) => {
+	delete: selfHostedAdminProcedure.input(z.object({ clientId: z.string().min(1) })).mutation(async ({ input }) => {
 		await db.delete(s.oauthClient).where(eq(s.oauthClient.clientId, input.clientId)).execute();
 		return { clientId: input.clientId };
 	}),
