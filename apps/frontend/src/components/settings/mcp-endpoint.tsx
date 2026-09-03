@@ -545,6 +545,10 @@ function OAuthClientsCard() {
 			<AddClientDialog
 				open={addOpen}
 				onOpenChange={(open) => {
+					// Don't let a close race an in-flight create — the one-time secret would be lost.
+					if (!open && createMutation.isPending) {
+						return;
+					}
 					setAddOpen(open);
 					if (!open) {
 						createMutation.reset();
@@ -559,8 +563,10 @@ function OAuthClientsCard() {
 
 			<ConfirmationDialog
 				open={deleteClientId !== null}
+				preventCloseWhilePending
 				onOpenChange={(open) => {
-					if (!open) {
+					// preventCloseWhilePending blocks closing mid-delete; still guard the reset.
+					if (!open && !deleteMutation.isPending) {
 						setDeleteClientId(null);
 						deleteMutation.reset();
 					}
