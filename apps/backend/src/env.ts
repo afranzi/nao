@@ -177,6 +177,19 @@ const envSchema = z.object({
 		.optional()
 		.transform((val) => (val === undefined ? undefined : val === 'true')),
 
+	/**
+	 * Public base URL external MCP clients connect to, when it differs from BETTER_AUTH_URL — e.g.
+	 * a deployment that serves the MCP endpoint on an internet-facing host while the UI stays on a
+	 * private/VPN-only host. Its `/mcp` URL is added to the OAuth token audiences, and the
+	 * protected-resource metadata + WWW-Authenticate header advertise whichever host the client
+	 * used. Leave unset for single-host deployments.
+	 */
+	MCP_PUBLIC_URL: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined)
+		.pipe(z.url({ message: 'MCP_PUBLIC_URL must be a valid URL' }).optional()),
+
 	POSTHOG_KEY: z.string().optional(),
 	POSTHOG_HOST: z.url({ message: 'POSTHOG_HOST must be a valid URL' }).optional(),
 	POSTHOG_DISABLED: z
@@ -283,6 +296,30 @@ export const isSelfHosted = env.NAO_MODE === 'self-hosted';
 
 const normalizedBaseUrl = env.BETTER_AUTH_URL.replace(/\/+$/, '');
 export const MCP_SERVER_URL = `${normalizedBaseUrl}/mcp`;
+
+const normalizedMcpPublicUrl = env.MCP_PUBLIC_URL?.replace(/\/+$/, '');
+/** The `/mcp` URL on the public host, when MCP_PUBLIC_URL is set. */
+export const MCP_PUBLIC_SERVER_URL = normalizedMcpPublicUrl ? `${normalizedMcpPublicUrl}/mcp` : undefined;
+/** OAuth resource identifiers the token endpoint accepts (RFC 8707 audiences). */
+export const MCP_VALID_AUDIENCES = [
+	env.BETTER_AUTH_URL,
+	MCP_SERVER_URL,
+	...(MCP_PUBLIC_SERVER_URL ? [MCP_PUBLIC_SERVER_URL] : []),
+];
+
+const mcpPublicHost = normalizedMcpPublicUrl ? new URL(normalizedMcpPublicUrl).host : undefined;
+
+/**
+ * The origin a client is talking to, so the protected-resource metadata and WWW-Authenticate
+ * header advertise the host actually in use. Returns the public MCP origin when the request came in
+ * on it, else BETTER_AUTH_URL — never an arbitrary Host header, so only known origins are advertised.
+ */
+export function resolveMcpFacingOrigin(requestHost: string | undefined): string {
+	if (normalizedMcpPublicUrl && requestHost && requestHost === mcpPublicHost) {
+		return normalizedMcpPublicUrl;
+	}
+	return normalizedBaseUrl;
+}
 
 export function noProjectMessage(): string {
 	return isCloud
