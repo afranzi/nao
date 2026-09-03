@@ -10,7 +10,6 @@ import { SettingsCard } from '@/components/ui/settings-card';
 import { SettingsToggleRow } from '@/components/ui/settings-toggle-row';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useIsCloud } from '@/hooks/use-nao-mode';
 import { cn } from '@/lib/utils';
 import { trpc } from '@/main';
 
@@ -445,11 +444,16 @@ function CopyButton({ text }: { text: string }) {
 type CreatedClient = { clientId: string; clientSecret: string | null };
 
 function OAuthClientsCard() {
-	const isCloud = useIsCloud();
 	const queryClient = useQueryClient();
 	// OAuth clients are deployment-wide (no per-workspace scoping), so this is self-hosted only —
-	// the backend enforces the same restriction.
-	const clientsQuery = useQuery({ ...trpc.mcpOAuthClients.list.queryOptions(), enabled: !isCloud });
+	// the backend enforces the same restriction. Wait for the config to resolve before deciding, so
+	// on cloud we neither fire the list request nor flash the card (naoMode is unknown until then).
+	const configQuery = useQuery(trpc.system.getPublicConfig.queryOptions());
+	const isCloud = configQuery.data?.naoMode === 'cloud';
+	const clientsQuery = useQuery({
+		...trpc.mcpOAuthClients.list.queryOptions(),
+		enabled: configQuery.isSuccess && !isCloud,
+	});
 	const listKey = trpc.mcpOAuthClients.list.queryOptions().queryKey;
 
 	const [addOpen, setAddOpen] = useState(false);
@@ -479,7 +483,8 @@ function OAuthClientsCard() {
 
 	const clients = clientsQuery.data ?? [];
 
-	if (isCloud) {
+	// Render nothing until the mode is known, and never on cloud.
+	if (!configQuery.isSuccess || isCloud) {
 		return null;
 	}
 
@@ -539,7 +544,12 @@ function OAuthClientsCard() {
 
 			<AddClientDialog
 				open={addOpen}
-				onOpenChange={setAddOpen}
+				onOpenChange={(open) => {
+					setAddOpen(open);
+					if (!open) {
+						createMutation.reset();
+					}
+				}}
 				onCreate={(input) => createMutation.mutate(input)}
 				pending={createMutation.isPending}
 				error={createMutation.error?.message ?? null}
@@ -549,7 +559,12 @@ function OAuthClientsCard() {
 
 			<ConfirmationDialog
 				open={deleteClientId !== null}
-				onOpenChange={(open) => !open && setDeleteClientId(null)}
+				onOpenChange={(open) => {
+					if (!open) {
+						setDeleteClientId(null);
+						deleteMutation.reset();
+					}
+				}}
 				title='Delete OAuth client?'
 				description='Apps using this client will immediately lose access to the MCP endpoint. This cannot be undone.'
 				confirmLabel='Delete'
