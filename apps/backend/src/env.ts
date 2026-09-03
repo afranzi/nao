@@ -306,7 +306,10 @@ export const MCP_VALID_AUDIENCES = [
 	MCP_SERVER_URL,
 	...(MCP_PUBLIC_SERVER_URL ? [MCP_PUBLIC_SERVER_URL] : []),
 ];
+/** Audiences a bearer token may carry to call /mcp — the MCP resource URLs, on either host. */
+export const MCP_TOKEN_AUDIENCES = [MCP_SERVER_URL, ...(MCP_PUBLIC_SERVER_URL ? [MCP_PUBLIC_SERVER_URL] : [])];
 
+// URL normalizes host to lowercase; compare request hosts case-insensitively to match.
 const mcpPublicHost = normalizedMcpPublicUrl ? new URL(normalizedMcpPublicUrl).host : undefined;
 
 /**
@@ -315,7 +318,7 @@ const mcpPublicHost = normalizedMcpPublicUrl ? new URL(normalizedMcpPublicUrl).h
  * on it, else BETTER_AUTH_URL — never an arbitrary Host header, so only known origins are advertised.
  */
 export function resolveMcpFacingOrigin(requestHost: string | undefined): string {
-	if (normalizedMcpPublicUrl && requestHost && requestHost === mcpPublicHost) {
+	if (normalizedMcpPublicUrl && requestHost && requestHost.toLowerCase() === mcpPublicHost) {
 		return normalizedMcpPublicUrl;
 	}
 	return normalizedBaseUrl;
