@@ -424,7 +424,7 @@ describe('SystemPrompt preloaded skills', () => {
 		const markdown = renderToMarkdown(SystemPrompt({ skills, preloadedSkills }));
 
 		expect(markdown).toContain('Preloaded Skills');
-		expect(markdown).toContain('already loaded in full');
+		expect(markdown).toContain('already loaded below');
 		expect(markdown).toContain('Always use net revenue.');
 	});
 

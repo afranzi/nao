@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { MAX_PRELOADED_SKILLS } from '@nao/shared/types';
 import { Empty } from '@/components/ui/empty';
 import { SettingsCard } from '@/components/ui/settings-card';
 import { SettingsControlRow } from '@/components/ui/settings-toggle-row';
@@ -25,12 +26,15 @@ export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProp
 	);
 
 	const discoveredSkills = skills.data ?? [];
-	const preloadedSkillNames = agentSettings.data?.skills?.preloaded ?? [];
+	const discoveredNames = new Set(discoveredSkills.map((skill) => skill.name));
+	const preloadedSkillNames = (agentSettings.data?.skills?.preloaded ?? []).filter((name) =>
+		discoveredNames.has(name),
+	);
+	const isSettingsReady = agentSettings.isSuccess && !agentSettings.isFetching;
 
 	const handlePreloadChange = (skillName: string, preloaded: boolean) => {
-		const discoveredNames = new Set(discoveredSkills.map((skill) => skill.name));
-		const currentNames = preloadedSkillNames.filter((name) => discoveredNames.has(name) && name !== skillName);
-		const nextPreloaded = preloaded ? [...currentNames, skillName] : currentNames;
+		const otherNames = preloadedSkillNames.filter((name) => name !== skillName);
+		const nextPreloaded = preloaded ? [...otherNames, skillName] : otherNames;
 		updateAgentSettings.mutate({ skills: { preloaded: nextPreloaded } });
 	};
 
@@ -40,10 +44,11 @@ export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProp
 			description='Load project skills in full at the start of every chat, so users do not need to mention them with /. Preloaded skills are sent with every message, which increases token usage and cost; very long skills are truncated and skills over the total budget are skipped.'
 		>
 			<PreloadedSkillsList
-				isLoading={skills.isLoading}
+				isLoading={skills.isLoading || agentSettings.isLoading}
 				skills={discoveredSkills}
 				preloadedSkillNames={preloadedSkillNames}
-				disabled={!isAdmin || updateAgentSettings.isPending}
+				isAtLimit={preloadedSkillNames.length >= MAX_PRELOADED_SKILLS}
+				disabled={!isAdmin || !isSettingsReady || updateAgentSettings.isPending}
 				onPreloadChange={handlePreloadChange}
 			/>
 		</SettingsCard>
@@ -54,6 +59,7 @@ interface PreloadedSkillsListProps {
 	isLoading: boolean;
 	skills: { name: string; description: string; location: string }[];
 	preloadedSkillNames: string[];
+	isAtLimit: boolean;
 	disabled: boolean;
 	onPreloadChange: (skillName: string, preloaded: boolean) => void;
 }
@@ -62,6 +68,7 @@ function PreloadedSkillsList({
 	isLoading,
 	skills,
 	preloadedSkillNames,
+	isAtLimit,
 	disabled,
 	onPreloadChange,
 }: PreloadedSkillsListProps) {
@@ -80,6 +87,7 @@ function PreloadedSkillsList({
 
 	return skills.map((skill, index) => {
 		const switchId = toSwitchId(skill.name, index);
+		const isPreloaded = preloadedSkillNames.includes(skill.name);
 		return (
 			<SettingsControlRow
 				key={skill.location}
@@ -90,9 +98,9 @@ function PreloadedSkillsList({
 				control={
 					<Switch
 						id={switchId}
-						checked={preloadedSkillNames.includes(skill.name)}
+						checked={isPreloaded}
 						onCheckedChange={(preloaded) => onPreloadChange(skill.name, preloaded)}
-						disabled={disabled}
+						disabled={disabled || (isAtLimit && !isPreloaded)}
 					/>
 				}
 			/>

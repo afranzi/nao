@@ -174,24 +174,25 @@ class SkillService {
 			return;
 		}
 
-		entry.skills = files.flatMap((file) => {
-			const filePath = join(entry.skillsFolderPath, file);
-			const realFilePath = this._resolveSkillFile(entry, filePath);
-			if (!realFilePath) {
-				return [];
-			}
+		const skills = files.flatMap((file) => this._readSkill(entry, file));
+		entry.skills = dropDuplicateSkillNames(skills);
+	}
 
-			const fileContent = readFileSync(realFilePath, 'utf8');
-			const { data } = matter(fileContent);
+	private _readSkill(entry: ProjectSkills, file: string): Skill[] {
+		const filePath = join(entry.skillsFolderPath, file);
+		const realFilePath = this._resolveSkillFile(entry, filePath);
+		if (!realFilePath) {
+			return [];
+		}
 
-			return [
-				{
-					name: String(data.name || file.replace('.md', '')).trim(),
-					description: data.description || '',
-					location: '/' + relative(entry.projectPath, filePath),
-				},
-			];
-		});
+		const { data } = matter(readFileSync(realFilePath, 'utf8'));
+		return [
+			{
+				name: String(data.name || file.replace('.md', '')).trim(),
+				description: data.description || '',
+				location: '/' + relative(entry.projectPath, filePath),
+			},
+		];
 	}
 
 	/** Skill files may be symlinks from a synced repo, so only files that really live in the skills folder are read. */
@@ -229,6 +230,21 @@ class SkillService {
 }
 
 export const skillService = new SkillService();
+
+/** Skills are looked up by name, so a second file claiming a taken name would be unreachable. */
+function dropDuplicateSkillNames(skills: Skill[]): Skill[] {
+	const seenNames = new Set<string>();
+	return skills.filter((skill) => {
+		if (seenNames.has(skill.name)) {
+			logger.warn(`Ignoring skill ${skill.location}: the name '${skill.name}' is already used`, {
+				source: 'agent',
+			});
+			return false;
+		}
+		seenNames.add(skill.name);
+		return true;
+	});
+}
 
 function isWithinDirectory(directory: string, target: string): boolean {
 	const relativePath = relative(directory, target);

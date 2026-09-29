@@ -394,8 +394,9 @@ function PreloadedSkillsBlock({ skills }: { skills: PreloadedSkill[] }) {
 		<Block>
 			<Title level={2}>Preloaded Skills</Title>
 			<Span>
-				These project skills are already loaded in full below. Follow them whenever they are relevant; do not
-				read their files again and do not call <Bold>load_skill</Bold> for them.
+				These project skills are already loaded below. Follow them whenever they are relevant. Very long skills
+				are truncated, so read a skill's file directly only when you need a part that is missing. Never call{' '}
+				<Bold>load_skill</Bold> for them.
 			</Span>
 			{skills.map((skill) => (
 				<>

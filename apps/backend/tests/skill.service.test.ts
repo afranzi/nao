@@ -169,6 +169,19 @@ describe('skillService.getPreloadedSkills', () => {
 		);
 	});
 
+	it('keeps only the first skill when two files resolve to the same name', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'nao-preload-duplicate-'));
+		const skillsDir = join(root, 'agent', 'skills');
+		mkdirSync(skillsDir, { recursive: true });
+		writeFileSync(join(skillsDir, 'a.md'), '---\nname: revenue\n---\n\nFirst body\n');
+		writeFileSync(join(skillsDir, 'b.md'), '---\nname: " revenue "\n---\n\nSecond body\n');
+		createdRoots.push(root);
+		projectPaths['preload-duplicate'] = root;
+		await skillService.initializeSkills('preload-duplicate');
+
+		expect(skillService.getSkills('preload-duplicate')).toHaveLength(1);
+	});
+
 	it('returns nothing when no skills are configured', async () => {
 		await initializeProject('preload-none', { alpha: 'Alpha body' });
 

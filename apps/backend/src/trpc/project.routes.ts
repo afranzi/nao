@@ -2,6 +2,7 @@ import { BACKGROUND_MODEL_CATEGORIES, type CustomBoundarySet } from '@nao/shared
 import { DATE_FORMAT_PRESETS } from '@nao/shared/date';
 import {
 	type LlmProvider,
+	MAX_PRELOADED_SKILLS,
 	MAX_PYTHON_EXECUTION_DURATION_SECS,
 	MIN_PYTHON_EXECUTION_DURATION_SECS,
 	SEMANTIC_LAYER_MODES,
@@ -984,7 +985,7 @@ export const projectRoutes = {
 					.optional(),
 				skills: z
 					.object({
-						preloaded: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+						preloaded: z.array(z.string().trim().min(1).max(200)).max(MAX_PRELOADED_SKILLS).optional(),
 					})
 					.optional(),
 			}),
