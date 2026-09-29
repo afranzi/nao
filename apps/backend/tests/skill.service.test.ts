@@ -125,6 +125,24 @@ describe('skillService.getPreloadedSkills', () => {
 		expect(preloaded.map((skill) => skill.name)).toEqual(['alpha']);
 	});
 
+	it('preloads a skill whose frontmatter name carries surrounding whitespace', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'nao-preload-whitespace-'));
+		const skillsDir = join(root, 'agent', 'skills');
+		mkdirSync(skillsDir, { recursive: true });
+		writeFileSync(
+			join(skillsDir, 'padded.md'),
+			'---\nname: "  padded  "\ndescription: Padded\n---\n\nPadded body\n',
+		);
+		createdRoots.push(root);
+		projectPaths['preload-whitespace'] = root;
+		await skillService.initializeSkills('preload-whitespace');
+
+		const preloaded = skillService.getPreloadedSkills('preload-whitespace', ['padded']);
+
+		expect(skillService.getSkills('preload-whitespace').map((skill) => skill.name)).toEqual(['padded']);
+		expect(preloaded.map((skill) => skill.name)).toEqual(['padded']);
+	});
+
 	it('returns nothing when no skills are configured', async () => {
 		await initializeProject('preload-none', { alpha: 'Alpha body' });
 

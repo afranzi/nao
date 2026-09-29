@@ -171,7 +171,7 @@ class SkillService {
 			const { data } = matter(fileContent);
 
 			return {
-				name: data.name || file.replace('.md', ''),
+				name: String(data.name || file.replace('.md', '')).trim(),
 				description: data.description || '',
 				location: '/' + relative(entry.projectPath, filePath),
 			};
