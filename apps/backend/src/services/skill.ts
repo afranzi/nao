@@ -195,12 +195,16 @@ class SkillService {
 		];
 	}
 
-	/** Skill files may be symlinks from a synced repo, so only files that really live in the skills folder are read. */
+	/**
+	 * Skill files, or the skills folder itself, may be symlinks from a synced repo,
+	 * so only files that really live in the skills folder inside the project are read.
+	 */
 	private _resolveSkillFile(entry: ProjectSkills, filePath: string): string | null {
 		try {
 			const realFilePath = realpathSync(filePath);
+			const isInsideProject = isWithinDirectory(realpathSync(entry.projectPath), realFilePath);
 			const isInsideSkillsFolder = isWithinDirectory(realpathSync(entry.skillsFolderPath), realFilePath);
-			if (isInsideSkillsFolder && statSync(realFilePath).isFile()) {
+			if (isInsideProject && isInsideSkillsFolder && statSync(realFilePath).isFile()) {
 				return realFilePath;
 			}
 			logger.warn(`Ignoring skill file outside the skills folder: ${filePath}`, { source: 'agent' });

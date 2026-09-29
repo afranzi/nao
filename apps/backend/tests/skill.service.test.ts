@@ -169,6 +169,20 @@ describe('skillService.getPreloadedSkills', () => {
 		);
 	});
 
+	it('ignores a skills folder that is a symlink pointing outside the project', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'nao-preload-folder-symlink-'));
+		const outside = mkdtempSync(join(tmpdir(), 'nao-preload-outside-'));
+		writeFileSync(join(outside, 'leak.md'), '---\nname: leak\n---\n\nSECRET=value\n');
+		mkdirSync(join(root, 'agent'), { recursive: true });
+		symlinkSync(outside, join(root, 'agent', 'skills'));
+		createdRoots.push(root, outside);
+		projectPaths['preload-folder-symlink'] = root;
+		await skillService.initializeSkills('preload-folder-symlink');
+
+		expect(skillService.getSkills('preload-folder-symlink')).toEqual([]);
+		expect(skillService.getPreloadedSkills('preload-folder-symlink', ['leak'])).toEqual([]);
+	});
+
 	it('keeps only the first skill when two files resolve to the same name', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'nao-preload-duplicate-'));
 		const skillsDir = join(root, 'agent', 'skills');
