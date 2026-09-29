@@ -24,7 +24,7 @@ vi.mock('../src/utils/logger', () => ({
 	logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { skillService } from '../src/services/skill';
+import { PRELOADED_SKILL_CHAR_LIMIT, PRELOADED_SKILLS_TOTAL_CHAR_LIMIT, skillService } from '../src/services/skill';
 
 function createProjectWithSkill(prefix: string, skillName: string, body: string): string {
 	const root = mkdtempSync(join(tmpdir(), `nao-skill-${prefix}-`));
@@ -80,5 +80,76 @@ describe('skillService project isolation', () => {
 
 		expect(skillService.getSkills('project-first').map((s) => s.name)).toEqual(['first-skill']);
 		expect(skillService.getSkills('project-second').map((s) => s.name)).toEqual(['second-skill']);
+	});
+});
+
+describe('skillService.getPreloadedSkills', () => {
+	const createdRoots: string[] = [];
+
+	afterAll(() => {
+		for (const root of createdRoots) {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	async function initializeProject(projectId: string, skills: Record<string, string>): Promise<void> {
+		const root = mkdtempSync(join(tmpdir(), `nao-preload-${projectId}-`));
+		const skillsDir = join(root, 'agent', 'skills');
+		mkdirSync(skillsDir, { recursive: true });
+		for (const [name, body] of Object.entries(skills)) {
+			writeFileSync(
+				join(skillsDir, `${name}.md`),
+				`---\nname: ${name}\ndescription: ${name} description\n---\n\n${body}\n`,
+			);
+		}
+		createdRoots.push(root);
+		projectPaths[projectId] = root;
+		await skillService.initializeSkills(projectId);
+	}
+
+	it('returns the configured skills with their content, in configured order', async () => {
+		await initializeProject('preload-order', { alpha: 'Alpha body', beta: 'Beta body', gamma: 'Gamma body' });
+
+		const preloaded = skillService.getPreloadedSkills('preload-order', ['gamma', 'alpha']);
+
+		expect(preloaded.map((skill) => skill.name)).toEqual(['gamma', 'alpha']);
+		expect(preloaded[0].content).toContain('Gamma body');
+		expect(preloaded[0].location).toBe('/agent/skills/gamma.md');
+	});
+
+	it('ignores unknown and duplicated names', async () => {
+		await initializeProject('preload-unknown', { alpha: 'Alpha body' });
+
+		const preloaded = skillService.getPreloadedSkills('preload-unknown', ['missing', 'alpha', 'alpha']);
+
+		expect(preloaded.map((skill) => skill.name)).toEqual(['alpha']);
+	});
+
+	it('returns nothing when no skills are configured', async () => {
+		await initializeProject('preload-none', { alpha: 'Alpha body' });
+
+		expect(skillService.getPreloadedSkills('preload-none')).toEqual([]);
+	});
+
+	it('truncates each skill to the per-skill limit', async () => {
+		await initializeProject('preload-long', { long: 'x'.repeat(PRELOADED_SKILL_CHAR_LIMIT * 2) });
+
+		const [preloaded] = skillService.getPreloadedSkills('preload-long', ['long']);
+
+		expect(preloaded.content.length).toBeLessThanOrEqual(PRELOADED_SKILL_CHAR_LIMIT);
+	});
+
+	it('drops skills that would exceed the total budget and keeps the ones that still fit', async () => {
+		const bigBody = 'x'.repeat(PRELOADED_SKILL_CHAR_LIMIT - 1_000);
+		const bigSkillCountThatFits = Math.floor(PRELOADED_SKILLS_TOTAL_CHAR_LIMIT / PRELOADED_SKILL_CHAR_LIMIT);
+		const bigSkillNames = Array.from({ length: bigSkillCountThatFits + 1 }, (_, index) => `big-${index}`);
+		const bigSkills = Object.fromEntries(bigSkillNames.map((name) => [name, bigBody]));
+		await initializeProject('preload-budget', { ...bigSkills, small: 'Small body' });
+
+		const preloaded = skillService.getPreloadedSkills('preload-budget', [...bigSkillNames, 'small']);
+		const totalChars = preloaded.reduce((total, skill) => total + skill.content.length, 0);
+
+		expect(preloaded.map((skill) => skill.name)).toEqual([...bigSkillNames.slice(0, -1), 'small']);
+		expect(totalChars).toBeLessThanOrEqual(PRELOADED_SKILLS_TOTAL_CHAR_LIMIT);
 	});
 });

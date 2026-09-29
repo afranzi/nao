@@ -5,12 +5,20 @@ import { join, relative } from 'path';
 
 import * as projectQueries from '../queries/project.queries';
 import { logger } from '../utils/logger';
+import { truncateMiddle } from '../utils/utils';
 
 export interface Skill {
 	name: string;
 	description: string;
 	location: string;
 }
+
+export interface PreloadedSkill extends Skill {
+	content: string;
+}
+
+export const PRELOADED_SKILL_CHAR_LIMIT = 16_000;
+export const PRELOADED_SKILLS_TOTAL_CHAR_LIMIT = 48_000;
 
 interface ProjectSkills {
 	projectPath: string;
@@ -62,6 +70,48 @@ class SkillService {
 			logger.error(`Failed to read skill content for ${skillName}: ${String(error)}`, { source: 'agent' });
 			return null;
 		}
+	}
+
+	/**
+	 * Preloaded skills ride along in every request, so the set is capped: each skill is truncated and
+	 * skills that would push the total over budget are dropped, in the order the operator listed them.
+	 */
+	public getPreloadedSkills(projectId: string, names: string[] = []): PreloadedSkill[] {
+		const preloaded: PreloadedSkill[] = [];
+		const dropped: string[] = [];
+		let totalChars = 0;
+
+		for (const skill of this._findSkillsByName(projectId, names)) {
+			const rawContent = this.getSkillContent(projectId, skill.name);
+			if (!rawContent) {
+				continue;
+			}
+
+			const content = truncateMiddle(rawContent, PRELOADED_SKILL_CHAR_LIMIT);
+			if (totalChars + content.length > PRELOADED_SKILLS_TOTAL_CHAR_LIMIT) {
+				dropped.push(skill.name);
+				continue;
+			}
+
+			totalChars += content.length;
+			preloaded.push({ ...skill, content });
+		}
+
+		if (dropped.length > 0) {
+			logger.warn(
+				`Preloaded skills over the ${PRELOADED_SKILLS_TOTAL_CHAR_LIMIT} character budget were skipped: ${dropped.join(', ')}`,
+				{ source: 'agent' },
+			);
+		}
+
+		return preloaded;
+	}
+
+	private _findSkillsByName(projectId: string, names: string[]): Skill[] {
+		const skills = this.getSkills(projectId);
+		return [...new Set(names)]
+			.map((name) => skills.find((skill) => skill.name === name))
+			.filter((skill): skill is Skill => skill !== undefined);
 	}
 
 	private async _initialize(projectId: string): Promise<void> {

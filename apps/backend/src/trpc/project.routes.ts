@@ -982,6 +982,11 @@ export const projectRoutes = {
 						model: llmSelectedModelSchema.nullable().optional(),
 					})
 					.optional(),
+				skills: z
+					.object({
+						preloaded: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+					})
+					.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
@@ -996,6 +1001,7 @@ export const projectRoutes = {
 				webSearch: { ...existing.webSearch, ...input.webSearch },
 				semanticLayer: { ...existing.semanticLayer, ...input.semanticLayer },
 				subagent: { ...existing.subagent, ...input.subagent },
+				skills: { ...existing.skills, ...input.skills },
 			};
 			posthog.capture(ctx.user.id, PostHogEvent.ProjectAgentSettingsUpdated, {
 				project_id: ctx.project.id,
@@ -1011,6 +1017,7 @@ export const projectRoutes = {
 				web_search_enabled: merged.webSearch?.enabled,
 				web_search_mode: merged.webSearch?.mode,
 				semantic_layer_mode: merged.semanticLayer?.mode,
+				preloaded_skills_count: merged.skills?.preloaded?.length ?? 0,
 			});
 			return projectQueries.updateAgentSettings(ctx.project.id, merged);
 		}),

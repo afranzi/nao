@@ -656,6 +656,10 @@ class AgentManager {
 		const { repos, templates, presence: contextPresence } = readProjectContext(this._toolContext.projectFolder);
 		const repoNames = repos.map((repo) => repo.name);
 		const skills = skillService.getSkills(this.chat.projectId);
+		const preloadedSkills = skillService.getPreloadedSkills(
+			this.chat.projectId,
+			this._toolContext.agentSettings?.skills?.preloaded,
+		);
 		const customCharts = this._toolContext.supportsCustomCharts
 			? listChartPlugins(this._toolContext.projectFolder)
 			: [];
@@ -673,6 +677,7 @@ class AgentManager {
 				connections,
 				configuredDatabases,
 				skills,
+				preloadedSkills,
 				customCharts,
 				mcpServers,
 				sandboxSecrets,
