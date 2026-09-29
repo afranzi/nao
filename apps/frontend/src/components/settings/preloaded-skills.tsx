@@ -16,20 +16,21 @@ export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProp
 
 	const updateAgentSettings = useMutation(
 		trpc.project.updateAgentSettings.mutationOptions({
-			onSuccess: () => {
-				queryClient.invalidateQueries({
-					queryKey: trpc.project.getAgentSettings.queryOptions().queryKey,
-				});
+			onSuccess: (nextSettings) => {
+				queryClient.setQueryData(trpc.project.getAgentSettings.queryOptions().queryKey, (previous) =>
+					previous ? { ...previous, ...nextSettings } : previous,
+				);
 			},
 		}),
 	);
 
+	const discoveredSkills = skills.data ?? [];
 	const preloadedSkillNames = agentSettings.data?.skills?.preloaded ?? [];
 
 	const handlePreloadChange = (skillName: string, preloaded: boolean) => {
-		const nextPreloaded = preloaded
-			? [...preloadedSkillNames, skillName]
-			: preloadedSkillNames.filter((name) => name !== skillName);
+		const discoveredNames = new Set(discoveredSkills.map((skill) => skill.name));
+		const currentNames = preloadedSkillNames.filter((name) => discoveredNames.has(name) && name !== skillName);
+		const nextPreloaded = preloaded ? [...currentNames, skillName] : currentNames;
 		updateAgentSettings.mutate({ skills: { preloaded: nextPreloaded } });
 	};
 
@@ -38,29 +39,68 @@ export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProp
 			title='Preloaded skills'
 			description='Load project skills in full at the start of every chat, so users do not need to mention them with /. Preloaded skills are sent with every message, which increases token usage and cost; very long skills are truncated and skills over the total budget are skipped.'
 		>
-			{skills.data?.length ? (
-				skills.data.map((skill) => (
-					<SettingsControlRow
-						key={skill.name}
-						id={`preload-skill-${skill.name}`}
-						label={skill.name}
-						description={skill.description || skill.location}
-						control={
-							<Switch
-								id={`preload-skill-${skill.name}`}
-								checked={preloadedSkillNames.includes(skill.name)}
-								onCheckedChange={(preloaded) => handlePreloadChange(skill.name, preloaded)}
-								disabled={!isAdmin || updateAgentSettings.isPending}
-							/>
-						}
-					/>
-				))
-			) : (
-				<Empty>
-					No skills found. Add Markdown files under <code className='font-mono'>agent/skills/</code> in the
-					project context.
-				</Empty>
-			)}
+			<PreloadedSkillsList
+				isLoading={skills.isLoading}
+				skills={discoveredSkills}
+				preloadedSkillNames={preloadedSkillNames}
+				disabled={!isAdmin || updateAgentSettings.isPending}
+				onPreloadChange={handlePreloadChange}
+			/>
 		</SettingsCard>
 	);
+}
+
+interface PreloadedSkillsListProps {
+	isLoading: boolean;
+	skills: { name: string; description: string; location: string }[];
+	preloadedSkillNames: string[];
+	disabled: boolean;
+	onPreloadChange: (skillName: string, preloaded: boolean) => void;
+}
+
+function PreloadedSkillsList({
+	isLoading,
+	skills,
+	preloadedSkillNames,
+	disabled,
+	onPreloadChange,
+}: PreloadedSkillsListProps) {
+	if (isLoading) {
+		return <div className='text-sm text-muted-foreground py-1'>Loading…</div>;
+	}
+
+	if (skills.length === 0) {
+		return (
+			<Empty>
+				No skills found. Add Markdown files under <code className='font-mono'>agent/skills/</code> in the
+				project context.
+			</Empty>
+		);
+	}
+
+	return skills.map((skill, index) => {
+		const switchId = toSwitchId(skill.name, index);
+		return (
+			<SettingsControlRow
+				key={skill.location}
+				id={switchId}
+				label={skill.name}
+				className='gap-4'
+				description={<span className='line-clamp-2 break-words'>{skill.description || skill.location}</span>}
+				control={
+					<Switch
+						id={switchId}
+						checked={preloadedSkillNames.includes(skill.name)}
+						onCheckedChange={(preloaded) => onPreloadChange(skill.name, preloaded)}
+						disabled={disabled}
+					/>
+				}
+			/>
+		);
+	});
+}
+
+function toSwitchId(skillName: string, index: number): string {
+	const slug = skillName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+	return `preload-skill-${index}-${slug}`;
 }

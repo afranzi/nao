@@ -1,7 +1,7 @@
 import { debounce } from '@nao/shared';
-import { existsSync, readdirSync, readFileSync, statSync, watch } from 'fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, watch } from 'fs';
 import matter from 'gray-matter';
-import { join, relative } from 'path';
+import { isAbsolute, join, relative } from 'path';
 
 import * as projectQueries from '../queries/project.queries';
 import { logger } from '../utils/logger';
@@ -64,8 +64,13 @@ class SkillService {
 			return null;
 		}
 
+		const realFilePath = this._resolveSkillFile(entry, join(entry.projectPath, skill.location));
+		if (!realFilePath) {
+			return null;
+		}
+
 		try {
-			return readFileSync(join(entry.projectPath, skill.location), 'utf8');
+			return readFileSync(realFilePath, 'utf8');
 		} catch (error) {
 			logger.error(`Failed to read skill content for ${skillName}: ${String(error)}`, { source: 'agent' });
 			return null;
@@ -73,8 +78,8 @@ class SkillService {
 	}
 
 	/**
-	 * Preloaded skills ride along in every request, so the set is capped: each skill is truncated and
-	 * skills that would push the total over budget are dropped, in the order the operator listed them.
+	 * Preloaded skills ride along in every request, so the set is capped: each skill body is truncated,
+	 * then skills are taken in the order the operator listed them, skipping any that no longer fit the total budget.
 	 */
 	public getPreloadedSkills(projectId: string, names: string[] = []): PreloadedSkill[] {
 		const preloaded: PreloadedSkill[] = [];
@@ -87,7 +92,12 @@ class SkillService {
 				continue;
 			}
 
-			const content = truncateMiddle(rawContent, PRELOADED_SKILL_CHAR_LIMIT);
+			const body = matter(rawContent).content.trim();
+			if (!body) {
+				continue;
+			}
+
+			const content = truncateMiddle(body, PRELOADED_SKILL_CHAR_LIMIT);
 			if (totalChars + content.length > PRELOADED_SKILLS_TOTAL_CHAR_LIMIT) {
 				dropped.push(skill.name);
 				continue;
@@ -164,18 +174,40 @@ class SkillService {
 			return;
 		}
 
-		entry.skills = files.map((file) => {
+		entry.skills = files.flatMap((file) => {
 			const filePath = join(entry.skillsFolderPath, file);
+			const realFilePath = this._resolveSkillFile(entry, filePath);
+			if (!realFilePath) {
+				return [];
+			}
 
-			const fileContent = readFileSync(filePath, 'utf8');
+			const fileContent = readFileSync(realFilePath, 'utf8');
 			const { data } = matter(fileContent);
 
-			return {
-				name: String(data.name || file.replace('.md', '')).trim(),
-				description: data.description || '',
-				location: '/' + relative(entry.projectPath, filePath),
-			};
+			return [
+				{
+					name: String(data.name || file.replace('.md', '')).trim(),
+					description: data.description || '',
+					location: '/' + relative(entry.projectPath, filePath),
+				},
+			];
 		});
+	}
+
+	/** Skill files may be symlinks from a synced repo, so only files that really live in the skills folder are read. */
+	private _resolveSkillFile(entry: ProjectSkills, filePath: string): string | null {
+		try {
+			const realFilePath = realpathSync(filePath);
+			const isInsideSkillsFolder = isWithinDirectory(realpathSync(entry.skillsFolderPath), realFilePath);
+			if (isInsideSkillsFolder && statSync(realFilePath).isFile()) {
+				return realFilePath;
+			}
+			logger.warn(`Ignoring skill file outside the skills folder: ${filePath}`, { source: 'agent' });
+			return null;
+		} catch (error) {
+			logger.error(`Failed to resolve skill file ${filePath}: ${String(error)}`, { source: 'agent' });
+			return null;
+		}
 	}
 
 	private _setupFileWatcher(projectId: string): void {
@@ -197,3 +229,8 @@ class SkillService {
 }
 
 export const skillService = new SkillService();
+
+function isWithinDirectory(directory: string, target: string): boolean {
+	const relativePath = relative(directory, target);
+	return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath);
+}

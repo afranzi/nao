@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -141,6 +141,32 @@ describe('skillService.getPreloadedSkills', () => {
 
 		expect(skillService.getSkills('preload-whitespace').map((skill) => skill.name)).toEqual(['padded']);
 		expect(preloaded.map((skill) => skill.name)).toEqual(['padded']);
+	});
+
+	it('strips the frontmatter from preloaded content', async () => {
+		await initializeProject('preload-frontmatter', { alpha: 'Alpha body' });
+
+		const [preloaded] = skillService.getPreloadedSkills('preload-frontmatter', ['alpha']);
+
+		expect(preloaded.content).toBe('Alpha body');
+	});
+
+	it('ignores skill files that are symlinks pointing outside the skills folder', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'nao-preload-symlink-'));
+		const skillsDir = join(root, 'agent', 'skills');
+		mkdirSync(skillsDir, { recursive: true });
+		const secretPath = join(root, 'secret.md');
+		writeFileSync(secretPath, '---\nname: leak\n---\n\nSECRET=value\n');
+		symlinkSync(secretPath, join(skillsDir, 'leak.md'));
+		writeFileSync(join(skillsDir, 'safe.md'), '---\nname: safe\n---\n\nSafe body\n');
+		createdRoots.push(root);
+		projectPaths['preload-symlink'] = root;
+		await skillService.initializeSkills('preload-symlink');
+
+		expect(skillService.getSkills('preload-symlink').map((skill) => skill.name)).toEqual(['safe']);
+		expect(skillService.getPreloadedSkills('preload-symlink', ['leak', 'safe']).map((skill) => skill.name)).toEqual(
+			['safe'],
+		);
 	});
 
 	it('returns nothing when no skills are configured', async () => {
