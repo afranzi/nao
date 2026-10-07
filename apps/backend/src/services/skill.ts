@@ -17,16 +17,26 @@ export interface PreloadedSkill extends Skill {
 	content: string;
 }
 
+export interface SkillLoadError {
+	location: string;
+	message: string;
+}
+
 export const PRELOADED_SKILL_CHAR_LIMIT = 16_000;
 export const PRELOADED_SKILLS_TOTAL_CHAR_LIMIT = 48_000;
+
+const SKILLS_FOLDER_LOCATION = '/agent/skills';
 
 interface ProjectSkills {
 	projectPath: string;
 	skillsFolderPath: string;
 	skills: Skill[];
+	loadErrors: SkillLoadError[];
 	fileWatcher: ReturnType<typeof watch> | null;
 	debouncedReload: () => void;
 }
+
+type SkillReadResult = { skill: Skill } | { loadError: SkillLoadError };
 
 class SkillService {
 	private _projects = new Map<string, ProjectSkills>();
@@ -51,6 +61,10 @@ class SkillService {
 
 	public getSkills(projectId: string): Skill[] {
 		return this._projects.get(projectId)?.skills ?? [];
+	}
+
+	public getSkillLoadErrors(projectId: string): SkillLoadError[] {
+		return this._projects.get(projectId)?.loadErrors ?? [];
 	}
 
 	public getSkillContent(projectId: string, skillName: string): string | null {
@@ -133,6 +147,7 @@ class SkillService {
 			projectPath,
 			skillsFolderPath,
 			skills: [],
+			loadErrors: [],
 			fileWatcher: null,
 			debouncedReload: debounce(() => this._loadSkills(projectId), 2000),
 		});
@@ -151,12 +166,14 @@ class SkillService {
 			if (!existsSync(entry.skillsFolderPath)) {
 				logger.warn(`Skills folder not found: ${entry.skillsFolderPath}`, { source: 'agent' });
 				entry.skills = [];
+				entry.loadErrors = [];
 				return;
 			}
 
 			if (!statSync(entry.skillsFolderPath).isDirectory()) {
 				logger.error(`Skills path is not a directory: ${entry.skillsFolderPath}`, { source: 'agent' });
 				entry.skills = [];
+				entry.loadErrors = [{ location: SKILLS_FOLDER_LOCATION, message: 'Skills path is not a directory' }];
 				return;
 			}
 
@@ -165,6 +182,7 @@ class SkillService {
 		} catch (error) {
 			logger.error(`Failed to load skills: ${String(error)}`, { source: 'agent' });
 			entry.skills = [];
+			entry.loadErrors = [{ location: SKILLS_FOLDER_LOCATION, message: toLoadErrorMessage(error) }];
 		}
 	}
 
@@ -174,25 +192,33 @@ class SkillService {
 			return;
 		}
 
-		const skills = files.flatMap((file) => this._readSkill(entry, file));
+		const results = files.flatMap((file) => this._readSkill(entry, file) ?? []);
+		const skills = results.flatMap((result) => ('skill' in result ? [result.skill] : []));
 		entry.skills = dropDuplicateSkillNames(skills);
+		entry.loadErrors = results.flatMap((result) => ('loadError' in result ? [result.loadError] : []));
 	}
 
-	private _readSkill(entry: ProjectSkills, file: string): Skill[] {
+	private _readSkill(entry: ProjectSkills, file: string): SkillReadResult | null {
 		const filePath = join(entry.skillsFolderPath, file);
+		const location = '/' + relative(entry.projectPath, filePath);
 		const realFilePath = this._resolveSkillFile(entry, filePath);
 		if (!realFilePath) {
-			return [];
+			return null;
 		}
 
-		const { data } = matter(readFileSync(realFilePath, 'utf8'));
-		return [
-			{
-				name: String(data.name || file.replace('.md', '')).trim(),
-				description: data.description || '',
-				location: '/' + relative(entry.projectPath, filePath),
-			},
-		];
+		try {
+			const { data } = matter(readFileSync(realFilePath, 'utf8'));
+			return {
+				skill: {
+					name: String(data.name || file.replace('.md', '')).trim(),
+					description: data.description || '',
+					location,
+				},
+			};
+		} catch (error) {
+			logger.error(`Ignoring skill file ${filePath}: ${String(error)}`, { source: 'agent' });
+			return { loadError: { location, message: toLoadErrorMessage(error) } };
+		}
 	}
 
 	/**
@@ -248,6 +274,12 @@ function dropDuplicateSkillNames(skills: Skill[]): Skill[] {
 		seenNames.add(skill.name);
 		return true;
 	});
+}
+
+/** YAML errors append a multi-line excerpt of the file; the first line already carries the reason and position. */
+function toLoadErrorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.split('\n')[0].trim();
 }
 
 function isWithinDirectory(directory: string, target: string): boolean {

@@ -183,6 +183,26 @@ describe('skillService.getPreloadedSkills', () => {
 		expect(skillService.getPreloadedSkills('preload-folder-symlink', ['leak'])).toEqual([]);
 	});
 
+	it('skips a skill file with invalid frontmatter without hiding the others', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'nao-preload-invalid-'));
+		const skillsDir = join(root, 'agent', 'skills');
+		mkdirSync(skillsDir, { recursive: true });
+		writeFileSync(
+			join(skillsDir, 'broken.md'),
+			'---\nname: broken\ndescription: NOTE: unquoted colon\n---\n\nBody\n',
+		);
+		writeFileSync(join(skillsDir, 'valid.md'), '---\nname: valid\n---\n\nValid body\n');
+		createdRoots.push(root);
+		projectPaths['preload-invalid'] = root;
+		await skillService.initializeSkills('preload-invalid');
+
+		expect(skillService.getSkills('preload-invalid').map((skill) => skill.name)).toEqual(['valid']);
+		const [loadError] = skillService.getSkillLoadErrors('preload-invalid');
+		expect(loadError.location).toBe('/agent/skills/broken.md');
+		expect(loadError.message).toContain('line 3');
+		expect(loadError.message).not.toContain('\n');
+	});
+
 	it('keeps only the first skill when two files resolve to the same name', async () => {
 		const root = mkdtempSync(join(tmpdir(), 'nao-preload-duplicate-'));
 		const skillsDir = join(root, 'agent', 'skills');

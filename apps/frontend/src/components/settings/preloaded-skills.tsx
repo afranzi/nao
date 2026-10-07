@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MAX_PRELOADED_SKILLS } from '@nao/shared/types';
+import { TriangleAlert } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Empty } from '@/components/ui/empty';
 import { SettingsCard } from '@/components/ui/settings-card';
 import { SettingsControlRow } from '@/components/ui/settings-toggle-row';
@@ -13,6 +15,7 @@ interface SettingsPreloadedSkillsProps {
 export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProps) {
 	const queryClient = useQueryClient();
 	const skills = useQuery(trpc.skill.list.queryOptions());
+	const skillLoadErrors = useQuery(trpc.skill.listLoadErrors.queryOptions());
 	const agentSettings = useQuery(trpc.project.getAgentSettings.queryOptions());
 
 	const updateAgentSettings = useMutation(
@@ -26,6 +29,7 @@ export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProp
 	);
 
 	const discoveredSkills = skills.data ?? [];
+	const loadErrors = skillLoadErrors.data ?? [];
 	const discoveredNames = new Set(discoveredSkills.map((skill) => skill.name));
 	const preloadedSkillNames = (agentSettings.data?.skills?.preloaded ?? []).filter((name) =>
 		discoveredNames.has(name),
@@ -45,19 +49,53 @@ export function SettingsPreloadedSkills({ isAdmin }: SettingsPreloadedSkillsProp
 		>
 			<PreloadedSkillsList
 				isLoading={skills.isLoading || agentSettings.isLoading}
+				isError={skills.isError}
 				skills={discoveredSkills}
+				hasLoadErrors={loadErrors.length > 0}
 				preloadedSkillNames={preloadedSkillNames}
 				isAtLimit={preloadedSkillNames.length >= MAX_PRELOADED_SKILLS}
 				disabled={!isAdmin || !isSettingsReady || updateAgentSettings.isPending}
 				onPreloadChange={handlePreloadChange}
 			/>
+			<SkillLoadErrorList loadErrors={loadErrors} />
 		</SettingsCard>
 	);
 }
 
+interface SkillLoadErrorListProps {
+	loadErrors: { location: string; message: string }[];
+}
+
+function SkillLoadErrorList({ loadErrors }: SkillLoadErrorListProps) {
+	return loadErrors.map((loadError) => (
+		<SettingsControlRow
+			key={loadError.location}
+			label={toFileName(loadError.location)}
+			className='gap-4'
+			description={
+				<span className='line-clamp-2 break-words' title={loadError.message}>
+					{loadError.message}
+				</span>
+			}
+			control={
+				<Badge variant='error' title={loadError.location}>
+					<TriangleAlert />
+					Failed to load
+				</Badge>
+			}
+		/>
+	));
+}
+
+function toFileName(location: string): string {
+	return location.split('/').pop() ?? location;
+}
+
 interface PreloadedSkillsListProps {
 	isLoading: boolean;
+	isError: boolean;
 	skills: { name: string; description: string; location: string }[];
+	hasLoadErrors: boolean;
 	preloadedSkillNames: string[];
 	isAtLimit: boolean;
 	disabled: boolean;
@@ -66,7 +104,9 @@ interface PreloadedSkillsListProps {
 
 function PreloadedSkillsList({
 	isLoading,
+	isError,
 	skills,
+	hasLoadErrors,
 	preloadedSkillNames,
 	isAtLimit,
 	disabled,
@@ -76,7 +116,11 @@ function PreloadedSkillsList({
 		return <div className='text-sm text-muted-foreground py-1'>Loading…</div>;
 	}
 
-	if (skills.length === 0) {
+	if (isError) {
+		return <div className='text-sm text-destructive py-1'>Failed to load skills.</div>;
+	}
+
+	if (skills.length === 0 && !hasLoadErrors) {
 		return (
 			<Empty>
 				No skills found. Add Markdown files under <code className='font-mono'>agent/skills/</code> in the
