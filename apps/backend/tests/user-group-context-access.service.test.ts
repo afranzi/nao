@@ -1,3 +1,4 @@
+import { ALL_FILES_CONTEXT_ACCESS } from '@nao/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/services/license.service', () => ({
@@ -25,6 +26,7 @@ import { resolveAvailableUserGroupAccess as resolveUserGroupAccess } from '../sr
 import {
 	expandDatabaseAccess,
 	isDatabaseObjectAllowed,
+	resolveMcpSettingsAccess,
 	resolveProjectContextAccess,
 	resolveWarehouseTableAccess,
 } from '../src/services/user-group-context-access.service';
@@ -32,9 +34,27 @@ import {
 const catalog = {
 	syncState: 'ready' as const,
 	objects: [
-		{ databaseType: 'postgres', database: 'analytics', schema: 'public', table: 'orders' },
-		{ databaseType: 'postgres', database: 'analytics', schema: 'public', table: 'users' },
-		{ databaseType: 'snowflake', database: 'warehouse', schema: 'raw', table: 'events' },
+		{
+			databaseType: 'postgres',
+			database: 'analytics',
+			schema: 'public',
+			table: 'orders',
+			columns: ['id', 'tenant_id'],
+		},
+		{
+			databaseType: 'postgres',
+			database: 'analytics',
+			schema: 'public',
+			table: 'users',
+			columns: ['id'],
+		},
+		{
+			databaseType: 'snowflake',
+			database: 'warehouse',
+			schema: 'raw',
+			table: 'events',
+			columns: ['id'],
+		},
 	],
 };
 
@@ -48,9 +68,11 @@ describe('warehouse Context access', () => {
 		vi.mocked(resolveUserGroupAccess).mockResolvedValue({
 			groupNames: ['All Users', 'Finance'],
 			features: [],
-			toolCallDensityPolicy: { defaultDensity: 'medium', canChange: false },
+			toolCallDensityPolicy: { defaultDensity: 'detailed', canChange: false },
 			databaseAccess: { mode: 'restricted', strict: true, grants: [], patterns: [] },
 			docsAccess: { mode: 'restricted', grants: [{ kind: 'folder', path: 'finance' }] },
+			filesAccess: ALL_FILES_CONTEXT_ACCESS,
+			mcpAccess: { mode: 'restricted', grants: [{ kind: 'server', server: 'github' }] },
 			rowPolicies: [],
 		});
 	});
@@ -78,6 +100,20 @@ describe('warehouse Context access', () => {
 		expect(resolveUserGroupAccess).not.toHaveBeenCalled();
 	});
 
+	it('resolves context after a system project request was already authorized', async () => {
+		vi.mocked(getUserRoleInProject).mockResolvedValue(null);
+
+		await expect(
+			resolveProjectContextAccess('system-example-project', 'user-1', '/project', {
+				projectAccessAlreadyAuthorized: true,
+			}),
+		).resolves.toMatchObject({
+			userRulesGroupAccess: { enforced: true, groupNames: ['All Users', 'Finance'] },
+		});
+		expect(getUserRoleInProject).not.toHaveBeenCalled();
+		expect(resolveUserGroupAccess).toHaveBeenCalledWith('system-example-project', 'user-1');
+	});
+
 	it('enforces docs, features, and RULES groups without unlimited entitlement', async () => {
 		vi.mocked(hasFeature).mockResolvedValue(false);
 		await expect(resolveProjectContextAccess('project-1', 'user-1', '/project')).resolves.toEqual({
@@ -87,10 +123,21 @@ describe('warehouse Context access', () => {
 				enforced: true,
 				access: { mode: 'restricted', grants: [{ kind: 'folder', path: 'finance' }] },
 			},
+			filesContextAccess: { enforced: true, access: ALL_FILES_CONTEXT_ACCESS },
+			mcpAccess: { mode: 'restricted', grants: [{ kind: 'server', server: 'github' }] },
 			userGroupFeatures: [],
 			userRulesGroupAccess: { enforced: true, groupNames: ['All Users', 'Finance'] },
 		});
 		expect(hasFeature).toHaveBeenCalledWith('row-level-security');
+	});
+
+	it('scopes MCP settings to the group grants except for admins', async () => {
+		await expect(resolveMcpSettingsAccess('project-1', 'user-1', 'user')).resolves.toEqual({
+			mode: 'restricted',
+			grants: [{ kind: 'server', server: 'github' }],
+		});
+		await expect(resolveMcpSettingsAccess('project-1', 'admin-1', 'admin')).resolves.toEqual({ mode: 'all' });
+		expect(resolveUserGroupAccess).toHaveBeenCalledTimes(1);
 	});
 
 	it('blocks every protected table when the row-security license is inactive', async () => {
@@ -139,7 +186,7 @@ describe('warehouse Context access', () => {
 		vi.mocked(resolveUserGroupAccess).mockResolvedValue({
 			groupNames: ['Finance'],
 			features: [],
-			toolCallDensityPolicy: { defaultDensity: 'medium', canChange: false },
+			toolCallDensityPolicy: { defaultDensity: 'detailed', canChange: false },
 			databaseAccess: { mode: 'all', strict: true },
 			docsAccess: { mode: 'all' },
 			rowPolicies: [{ version: 1, policies: [{ ...orders, access: 'full' }] }],
@@ -167,7 +214,7 @@ describe('warehouse Context access', () => {
 		vi.mocked(resolveUserGroupAccess).mockResolvedValue({
 			groupNames: ['Context group', 'Non-Context group'],
 			features: [],
-			toolCallDensityPolicy: { defaultDensity: 'medium', canChange: false },
+			toolCallDensityPolicy: { defaultDensity: 'detailed', canChange: false },
 			databaseAccess: {
 				mode: 'restricted',
 				strict: true,
@@ -201,7 +248,7 @@ describe('warehouse Context access', () => {
 		vi.mocked(resolveUserGroupAccess).mockResolvedValue({
 			groupNames: ['Context group', 'Non-Context group'],
 			features: [],
-			toolCallDensityPolicy: { defaultDensity: 'medium', canChange: false },
+			toolCallDensityPolicy: { defaultDensity: 'detailed', canChange: false },
 			databaseAccess: {
 				mode: 'restricted',
 				strict: true,
@@ -252,8 +299,20 @@ describe('warehouse Context access', () => {
 			enforced: true,
 			strict: true,
 			tables: [
-				{ databaseType: 'postgres', database: 'analytics', schema: 'public', table: 'orders' },
-				{ databaseType: 'postgres', database: 'analytics', schema: 'public', table: 'users' },
+				{
+					databaseType: 'postgres',
+					database: 'analytics',
+					schema: 'public',
+					table: 'orders',
+					columns: ['id', 'tenant_id'],
+				},
+				{
+					databaseType: 'postgres',
+					database: 'analytics',
+					schema: 'public',
+					table: 'users',
+					columns: ['id'],
+				},
 			],
 		});
 	});
@@ -280,7 +339,15 @@ describe('warehouse Context access', () => {
 		).toEqual({
 			enforced: true,
 			strict: true,
-			tables: [{ databaseType: 'snowflake', database: 'warehouse', schema: 'raw', table: 'events' }],
+			tables: [
+				{
+					databaseType: 'snowflake',
+					database: 'warehouse',
+					schema: 'raw',
+					table: 'events',
+					columns: ['id'],
+				},
+			],
 		});
 	});
 
@@ -289,7 +356,13 @@ describe('warehouse Context access', () => {
 			...catalog,
 			objects: [
 				...catalog.objects,
-				{ databaseType: 'snowflake', database: 'warehouse', schema: 'public', table: 'users' },
+				{
+					databaseType: 'snowflake',
+					database: 'warehouse',
+					schema: 'public',
+					table: 'users',
+					columns: ['id'],
+				},
 			],
 		};
 		expect(
@@ -301,9 +374,27 @@ describe('warehouse Context access', () => {
 			enforced: true,
 			strict: true,
 			tables: [
-				{ databaseType: 'postgres', database: 'analytics', schema: 'public', table: 'users' },
-				{ databaseType: 'snowflake', database: 'warehouse', schema: 'public', table: 'users' },
-				{ databaseType: 'snowflake', database: 'warehouse', schema: 'raw', table: 'events' },
+				{
+					databaseType: 'postgres',
+					database: 'analytics',
+					schema: 'public',
+					table: 'users',
+					columns: ['id'],
+				},
+				{
+					databaseType: 'snowflake',
+					database: 'warehouse',
+					schema: 'public',
+					table: 'users',
+					columns: ['id'],
+				},
+				{
+					databaseType: 'snowflake',
+					database: 'warehouse',
+					schema: 'raw',
+					table: 'events',
+					columns: ['id'],
+				},
 			],
 		});
 	});
@@ -362,7 +453,7 @@ describe('warehouse Context access', () => {
 		vi.mocked(resolveUserGroupAccess).mockResolvedValue({
 			groupNames: ['All Users'],
 			features: [],
-			toolCallDensityPolicy: { defaultDensity: 'medium', canChange: false },
+			toolCallDensityPolicy: { defaultDensity: 'detailed', canChange: false },
 			databaseAccess: { mode: 'all', strict: true },
 			docsAccess: { mode: 'all' },
 			rowPolicies: [],

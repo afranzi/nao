@@ -2,6 +2,8 @@ import {
 	DEFAULT_TOOL_CALL_DENSITY_POLICY,
 	EMPTY_DATABASE_CONTEXT_ACCESS,
 	EMPTY_DOCS_CONTEXT_ACCESS,
+	EMPTY_FILES_CONTEXT_ACCESS,
+	EMPTY_MCP_ACCESS,
 	EMPTY_PROJECT_ROW_SECURITY,
 	EMPTY_USER_GROUP_ROW_POLICIES,
 	EMPTY_USER_GROUP_SSO_MAPPINGS,
@@ -9,23 +11,38 @@ import {
 	filterProjectRowSecurityByDatabaseContext,
 	filterUserGroupRowPoliciesByDatabaseContext,
 	normalizeDatabaseContextAccess,
-	normalizeDocsContextAccess,
+	normalizeFileTreeAccess,
+	normalizeMcpAccess,
 	normalizeUserGroupRowPolicies,
 	normalizeUserGroupSsoMappings,
 	USER_GROUP_FEATURE_DEFINITIONS,
 } from '@nao/shared';
+import { DEFAULT_MEMBER_BUDGET_PERIOD } from '@nao/shared/member-budget';
 import { USER_ROLE_LABELS, USER_ROLES } from '@nao/shared/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Lock } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DatabaseContextAccess, DocsContextAccess, UserGroupRowPolicies, UserGroupSsoMappings } from '@nao/shared';
+import type {
+	DatabaseContextAccess,
+	DocsContextAccess,
+	FilesContextAccess,
+	FileTreeAccess,
+	McpAccess,
+	ProjectSharingPermission,
+	UserGroupFeatureDefinition,
+	UserGroupRowPolicies,
+	UserGroupSsoMappings,
+} from '@nao/shared';
 import type { ToolCallDensity, UserRole } from '@nao/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 
 import type { TabBarItem } from '@/components/ui/tab-bar';
 import { ToolCallDensitySlider } from '@/components/settings/tool-call-density-slider';
+import { UserGroupBudget } from '@/components/settings/user-group-budget';
 import { UserGroupContextAccess } from '@/components/settings/user-group-context-access';
 import { UserGroupFeatureCard } from '@/components/settings/user-group-feature-card';
+import { UserGroupMcpAccess } from '@/components/settings/user-group-mcp-access';
+import { UserGroupProjectSharing } from '@/components/settings/user-group-project-sharing';
 import { areUserGroupRowPolicyDraftsValid, UserGroupRowSecurity } from '@/components/settings/user-group-row-security';
 import { UserGroupSsoMapping } from '@/components/settings/user-group-sso-mapping';
 import { UserGroupSwitchRow } from '@/components/settings/user-group-switch-row';
@@ -36,6 +53,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { TabBar, TabPanel } from '@/components/ui/tab-bar';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
 import { useLicenseFeatures } from '@/hooks/use-license';
+import { useOfferedUserGroupFeatures } from '@/hooks/use-offered-user-group-features';
 import { trpc } from '@/main';
 
 type UserGroupFeature = (typeof USER_GROUP_FEATURE_DEFINITIONS)[number]['key'];
@@ -45,6 +63,11 @@ interface ToolCallDensityPolicy {
 	canChange: boolean;
 }
 
+interface ProjectWideShareRevocation {
+	chatCount: number;
+	storyCount: number;
+}
+
 export interface UserGroupEditorGroup {
 	id: string;
 	name: string;
@@ -52,13 +75,16 @@ export interface UserGroupEditorGroup {
 	isLocked?: false;
 	featureGrants: UserGroupFeature[];
 	toolCallDensityPolicy: ToolCallDensityPolicy;
+	projectSharing: ProjectSharingPermission;
 	databaseAccess: DatabaseContextAccess;
 	docsAccess: DocsContextAccess;
+	filesAccess: FilesContextAccess;
+	mcpAccess: McpAccess;
 	ssoMappings: UserGroupSsoMappings;
 	rowPolicies?: UserGroupRowPolicies;
 }
 
-export type UserGroupEditorTab = 'features' | 'context' | 'security' | 'sso';
+export type UserGroupEditorTab = 'features' | 'context' | 'mcp' | 'security' | 'budget' | 'sso';
 
 interface UserGroupEditorProps {
 	group: UserGroupEditorGroup | 'new';
@@ -72,7 +98,9 @@ interface UserGroupEditorProps {
 const defaultTabs: TabBarItem<UserGroupEditorTab>[] = [
 	{ id: 'features', label: 'Features' },
 	{ id: 'context', label: 'Context' },
+	{ id: 'mcp', label: 'MCP' },
 	{ id: 'security', label: 'Security' },
+	{ id: 'budget', label: 'Budget' },
 ];
 
 const defaultProjectRoleOptions: readonly UserRole[] = [...USER_ROLES.filter((role) => role !== 'admin'), 'admin'];
@@ -112,10 +140,20 @@ export function UserGroupEditor({
 	const [docsAccess, setDocsAccess] = useState<DocsContextAccess>(
 		existingGroup?.docsAccess ?? EMPTY_DOCS_CONTEXT_ACCESS,
 	);
+	const [filesAccess, setFilesAccess] = useState<FilesContextAccess>(
+		existingGroup?.filesAccess ?? EMPTY_FILES_CONTEXT_ACCESS,
+	);
+	const [mcpAccess, setMcpAccess] = useState<McpAccess>(existingGroup?.mcpAccess ?? EMPTY_MCP_ACCESS);
 	const [ssoMappings, setSsoMappings] = useState<UserGroupSsoMappings>(
 		existingGroup?.ssoMappings ?? EMPTY_USER_GROUP_SSO_MAPPINGS,
 	);
 	const [rowPolicies, setRowPolicies] = useState<UserGroupRowPolicies>(existingRowPolicies);
+	const [projectSharing, setProjectSharing] = useState<ProjectSharingPermission>(
+		existingGroup?.projectSharing ?? 'inherit',
+	);
+	const [shareRevocation, setShareRevocation] = useState<ProjectWideShareRevocation | null>(null);
+	const [isShareRevocationOpen, setIsShareRevocationOpen] = useState(false);
+	const [isRevokingShares, setIsRevokingShares] = useState(false);
 	const [formError, setFormError] = useState<string | null>(null);
 	const [showRowPolicyValidationErrors, setShowRowPolicyValidationErrors] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
@@ -126,6 +164,22 @@ export function UserGroupEditor({
 	const licenseFeatures = useLicenseFeatures();
 	const hasSso = licenseFeatures.data?.sso === true;
 	const hasRowLevelSecurity = licenseFeatures.data?.['row-level-security'] === true;
+	const hasMemberBudget = licenseFeatures.data?.['user-budget'] === true;
+	const memberBudgetTabUnavailable = !licenseFeatures.isLoading && !hasMemberBudget;
+	const memberBudgetOverview = useQuery({
+		...trpc.memberBudget.getOverview.queryOptions(),
+		enabled: hasMemberBudget,
+	});
+	const userGroupOverview = useQuery(trpc.userGroup.overview.queryOptions());
+	const groupBudgetMembers = useMemo(
+		() => buildGroupBudgetMembers(memberBudgetOverview.data?.members ?? [], userGroupOverview.data),
+		[memberBudgetOverview.data?.members, userGroupOverview.data],
+	);
+	const savedGroupBudgetUsd = hasMemberBudget
+		? resolveSavedGroupBudget(existingGroup, memberBudgetOverview.data)
+		: null;
+	const [groupBudgetUsd, setGroupBudgetUsd] = useState<number | null>(savedGroupBudgetUsd);
+	const hasGroupBudgetChanges = hasMemberBudget && groupBudgetUsd !== savedGroupBudgetUsd;
 	const rowSecurity = useQuery(trpc.userGroup.rowSecurity.queryOptions());
 	const rowSecurityState = rowSecurity.isLoading ? 'loading' : rowSecurity.isError ? 'error' : 'ready';
 	const rowSecurityRegistry =
@@ -189,15 +243,27 @@ export function UserGroupEditor({
 		oidcConfigurationState === 'loading' ||
 		microsoftConfigurationState === 'loading';
 	const hasSsoTab = hasConfiguredSsoProvider;
-	const tabs = hasSsoTab ? [...defaultTabs, { id: 'sso' as const, label: 'SSO' }] : defaultTabs;
+	const mcpTabUnavailable = !licenseFeatures.isLoading && !hasRowLevelSecurity;
+	const lockedTabs = new Set<UserGroupEditorTab>([
+		...(memberBudgetTabUnavailable ? (['budget'] as const) : []),
+		...(mcpTabUnavailable ? (['mcp'] as const) : []),
+	]);
+	const tabs = (hasSsoTab ? [...defaultTabs, { id: 'sso' as const, label: 'SSO' }] : defaultTabs).map((tab) =>
+		lockedTabs.has(tab.id) ? { ...tab, label: <LockedTabLabel label={tab.label} /> } : tab,
+	);
+	const hasProjectSharingChanges = existingGroup !== null && projectSharing !== existingGroup.projectSharing;
 	const hasUnsavedChanges =
 		editorGroup === null ||
+		hasGroupBudgetChanges ||
 		hasUserGroupEditorChanges(editorGroup, {
 			name,
 			featureGrants,
 			toolCallDensityPolicy,
+			projectSharing,
 			databaseAccess,
 			docsAccess,
+			filesAccess,
+			mcpAccess,
 			ssoMappings,
 			rowPolicies,
 		});
@@ -206,8 +272,11 @@ export function UserGroupEditor({
 		setName(existingGroup?.name ?? '');
 		setFeatureGrants(existingGroup?.featureGrants ?? []);
 		setToolCallDensityPolicy(existingGroup?.toolCallDensityPolicy ?? DEFAULT_TOOL_CALL_DENSITY_POLICY);
+		setProjectSharing(existingGroup?.projectSharing ?? 'inherit');
 		setDatabaseAccess(existingGroup?.databaseAccess ?? EMPTY_DATABASE_CONTEXT_ACCESS);
 		setDocsAccess(existingGroup?.docsAccess ?? EMPTY_DOCS_CONTEXT_ACCESS);
+		setFilesAccess(existingGroup?.filesAccess ?? EMPTY_FILES_CONTEXT_ACCESS);
+		setMcpAccess(existingGroup?.mcpAccess ?? EMPTY_MCP_ACCESS);
 		setSsoMappings(existingGroup?.ssoMappings ?? EMPTY_USER_GROUP_SSO_MAPPINGS);
 		setRowPolicies(existingRowPolicies);
 		setFormError(null);
@@ -225,8 +294,11 @@ export function UserGroupEditor({
 				name,
 				featureGrants,
 				toolCallDensityPolicy,
+				projectSharing,
 				databaseAccess,
 				docsAccess,
+				filesAccess,
+				mcpAccess,
 				ssoMappings,
 				rowPolicies,
 			});
@@ -239,12 +311,19 @@ export function UserGroupEditor({
 		docsAccess,
 		editorGroup,
 		featureGrants,
+		filesAccess,
+		mcpAccess,
 		name,
+		projectSharing,
 		resetForm,
 		rowPolicies,
 		ssoMappings,
 		toolCallDensityPolicy,
 	]);
+
+	useEffect(() => {
+		setGroupBudgetUsd(savedGroupBudgetUsd);
+	}, [existingGroup?.id, savedGroupBudgetUsd]);
 
 	useEffect(() => {
 		if (activeTab === 'sso' && !isSsoConfigLoading && !hasSsoTab) {
@@ -269,6 +348,30 @@ export function UserGroupEditor({
 			onTabChange('security');
 			return;
 		}
+		if (existingGroup && hasProjectSharingChanges) {
+			try {
+				const revocation = await queryClient.fetchQuery({
+					...trpc.userGroup.previewProjectSharingRevocation.queryOptions({
+						groupId: existingGroup.id,
+						projectSharing,
+					}),
+					staleTime: 0,
+				});
+				if (revocation.chatCount + revocation.storyCount > 0) {
+					setShareRevocation(revocation);
+					setIsShareRevocationOpen(true);
+					return;
+				}
+			} catch (error) {
+				setFormError(error instanceof Error ? error.message : 'Failed to save the group.');
+				return;
+			}
+		}
+		await saveGroup();
+	};
+
+	const saveGroup = async (): Promise<boolean> => {
+		const budgetInput = hasGroupBudgetChanges ? { budgetLimitUsd: groupBudgetUsd } : {};
 		try {
 			if (existingGroup) {
 				await updateGroup.mutateAsync({
@@ -276,10 +379,14 @@ export function UserGroupEditor({
 					...(existingGroup.isDefault ? {} : { name }),
 					featureGrants,
 					toolCallDensityPolicy,
+					projectSharing,
 					databaseAccess,
 					docsAccess,
+					filesAccess,
+					mcpAccess,
 					ssoMappings,
 					...(hasRowLevelSecurity ? { rowPolicies } : {}),
+					...budgetInput,
 				});
 				await invalidateUserGroupQueries(queryClient);
 			} else {
@@ -287,18 +394,34 @@ export function UserGroupEditor({
 					name,
 					featureGrants,
 					toolCallDensityPolicy,
+					projectSharing,
 					databaseAccess,
 					docsAccess,
+					filesAccess,
+					mcpAccess,
 					ssoMappings,
 					...(hasRowLevelSecurity ? { rowPolicies } : {}),
+					...budgetInput,
 				});
 				await invalidateUserGroupQueries(queryClient);
 				onCreated(createdGroup);
 			}
 			setShowRowPolicyValidationErrors(false);
+			return true;
 		} catch (error) {
 			setFormError(error instanceof Error ? error.message : 'Failed to save the group.');
+			return false;
 		}
+	};
+
+	const handleConfirmShareRevocation = async () => {
+		setIsRevokingShares(true);
+		const saved = await saveGroup();
+		if (saved) {
+			await invalidateShareQueries(queryClient);
+		}
+		setIsRevokingShares(false);
+		setIsShareRevocationOpen(false);
 	};
 
 	const handleDelete = async () => {
@@ -323,6 +446,7 @@ export function UserGroupEditor({
 			return;
 		}
 		resetForm();
+		setGroupBudgetUsd(savedGroupBudgetUsd);
 	};
 	const retrySsoConfiguration = (configuration: { refetch: () => unknown }) =>
 		void (ssoLicenseState === 'error' ? licenseFeatures.refetch() : configuration.refetch());
@@ -356,6 +480,12 @@ export function UserGroupEditor({
 							<UserGroupFeatures
 								featureGrants={featureGrants}
 								onFeatureGrantsChange={setFeatureGrants}
+								isDefaultGroup={existingGroup?.isDefault === true}
+								defaultAllowsProjectSharing={isProjectSharingAllowedByDefault(
+									userGroupOverview.data?.groups,
+								)}
+								projectSharing={projectSharing}
+								onProjectSharingChange={setProjectSharing}
 								toolCallDensityPolicy={toolCallDensityPolicy}
 								onToolCallDensityPolicyChange={setToolCallDensityPolicy}
 							/>
@@ -365,11 +495,20 @@ export function UserGroupEditor({
 								<UserGroupContextAccess
 									databaseAccess={databaseAccess}
 									docsAccess={docsAccess}
+									filesAccess={filesAccess}
 									onDatabaseAccessChange={handleDatabaseAccessChange}
 									onDocsAccessChange={setDocsAccess}
+									onFilesAccessChange={setFilesAccess}
 								/>
 								<ConditionalRulesHelp groupName={name} />
 							</div>
+						)}
+						{activeTab === 'mcp' && (
+							<UserGroupMcpAccess
+								mcpAccess={mcpAccess}
+								isLicensed={hasRowLevelSecurity}
+								onMcpAccessChange={setMcpAccess}
+							/>
 						)}
 						{activeTab === 'security' && (
 							<div className='min-h-64'>
@@ -391,6 +530,21 @@ export function UserGroupEditor({
 									/>
 								)}
 							</div>
+						)}
+						{activeTab === 'budget' && (
+							<UserGroupBudget
+								groupId={existingGroup?.id ?? null}
+								isLicensed={hasMemberBudget}
+								isDefaultGroup={existingGroup?.isDefault === true}
+								isLoading={memberBudgetOverview.isLoading || userGroupOverview.isLoading}
+								isError={memberBudgetOverview.isError || userGroupOverview.isError}
+								limitUsd={groupBudgetUsd}
+								defaultLimitUsd={memberBudgetOverview.data?.defaultLimitUsd ?? 0}
+								period={memberBudgetOverview.data?.period ?? DEFAULT_MEMBER_BUDGET_PERIOD}
+								members={groupBudgetMembers}
+								groups={memberBudgetOverview.data?.groups ?? []}
+								onLimitChange={setGroupBudgetUsd}
+							/>
 						)}
 						{activeTab === 'sso' && (hasSsoTab || isSsoConfigLoading) && (
 							<div className='flex min-h-64 flex-col gap-5'>
@@ -539,8 +693,54 @@ export function UserGroupEditor({
 				isPending={deleteGroup.isPending}
 				preventCloseWhilePending
 			/>
+
+			<ConfirmationDialog
+				open={isShareRevocationOpen}
+				onOpenChange={setIsShareRevocationOpen}
+				title='Unshare content shared with everyone?'
+				description={shareRevocation ? describeShareRevocation(shareRevocation) : ''}
+				confirmLabel='Unshare and save'
+				onConfirm={handleConfirmShareRevocation}
+				isPending={isRevokingShares}
+				preventCloseWhilePending
+			/>
 		</>
 	);
+}
+
+function LockedTabLabel({ label }: { label: TabBarItem<UserGroupEditorTab>['label'] }) {
+	return (
+		<span className='flex items-center gap-1.5'>
+			{label}
+			<span
+				aria-hidden='true'
+				className='inline-flex size-5 items-center justify-center rounded-full bg-primary/10 text-primary'
+			>
+				<Lock className='size-3' />
+			</span>
+		</span>
+	);
+}
+
+function describeShareRevocation({ chatCount, storyCount }: ProjectWideShareRevocation): string {
+	const items = [pluralize(chatCount, 'chat'), pluralize(storyCount, 'story', 'stories')]
+		.filter((item): item is string => item !== null)
+		.join(' and ');
+	return `Turning off sharing to the entire project unshares ${items} currently shared with all project members. Their owners can share them again with their groups.`;
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string | null {
+	if (count === 0) {
+		return null;
+	}
+	return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function isProjectSharingAllowedByDefault(
+	groups: ReadonlyArray<{ isDefault: boolean; projectSharing?: ProjectSharingPermission }> | undefined,
+): boolean | undefined {
+	const defaultGroup = groups?.find((group) => group.isDefault);
+	return defaultGroup ? defaultGroup.projectSharing !== 'blocked' : undefined;
 }
 
 function RowSecurityStatus({ message, onRetry }: { message: string; onRetry?: () => void }) {
@@ -744,8 +944,11 @@ export function hasUserGroupEditorChanges(
 		name: string;
 		featureGrants: UserGroupFeature[];
 		toolCallDensityPolicy: ToolCallDensityPolicy;
+		projectSharing?: ProjectSharingPermission;
 		databaseAccess: DatabaseContextAccess;
 		docsAccess?: DocsContextAccess;
+		filesAccess?: FilesContextAccess;
+		mcpAccess?: McpAccess;
 		ssoMappings?: UserGroupSsoMappings;
 		rowPolicies?: UserGroupRowPolicies;
 	},
@@ -755,8 +958,11 @@ export function hasUserGroupEditorChanges(
 		!haveSameItems(values.featureGrants, group.featureGrants) ||
 		values.toolCallDensityPolicy.defaultDensity !== group.toolCallDensityPolicy.defaultDensity ||
 		values.toolCallDensityPolicy.canChange !== group.toolCallDensityPolicy.canChange ||
+		(values.projectSharing ?? group.projectSharing) !== group.projectSharing ||
 		!haveSameDatabaseAccess(values.databaseAccess, group.databaseAccess) ||
-		!haveSameDocsAccess(values.docsAccess ?? group.docsAccess, group.docsAccess) ||
+		!haveSameFileTreeAccess(values.docsAccess ?? group.docsAccess, group.docsAccess) ||
+		!haveSameFileTreeAccess(values.filesAccess ?? group.filesAccess, group.filesAccess) ||
+		!haveSameMcpAccess(values.mcpAccess ?? group.mcpAccess, group.mcpAccess) ||
 		!haveSameSsoMappings(values.ssoMappings ?? group.ssoMappings, group.ssoMappings) ||
 		!haveSameRowPolicies(
 			values.rowPolicies ?? group.rowPolicies ?? EMPTY_USER_GROUP_ROW_POLICIES,
@@ -773,20 +979,92 @@ export function invalidateUserGroupQueries(queryClient: QueryClient) {
 		queryClient.invalidateQueries({ queryKey: trpc.userGroup.effectiveOidcEnvMappings.queryKey() }),
 		queryClient.invalidateQueries({ queryKey: trpc.userGroup.effectiveMicrosoftEnvMappings.queryKey() }),
 		queryClient.invalidateQueries({ queryKey: trpc.project.getDatabaseObjects.queryKey() }),
+		queryClient.invalidateQueries({ queryKey: [['memberBudget']] }),
 	]);
+}
+
+function invalidateShareQueries(queryClient: QueryClient) {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: [['sharedChat']] }),
+		queryClient.invalidateQueries({ queryKey: [['storyShare']] }),
+	]);
+}
+
+function resolveSavedGroupBudget(
+	group: UserGroupEditorGroup | null,
+	overview: { defaultLimitUsd: number; groups: Array<{ id: string; limitUsd: number | null }> } | undefined,
+): number | null {
+	if (!group || !overview) {
+		return null;
+	}
+	if (group.isDefault) {
+		return overview.defaultLimitUsd;
+	}
+	return overview.groups.find((candidate) => candidate.id === group.id)?.limitUsd ?? null;
+}
+
+function buildGroupBudgetMembers(
+	budgetMembers: Array<{
+		id: string;
+		name: string;
+		email: string;
+		spendUsd: number;
+		personalLimitUsd: number | null;
+		groupIds: string[];
+	}>,
+	userGroups:
+		| {
+				users: Array<{ id: string; name: string; email: string }>;
+				memberships: Array<{ groupId: string; userId: string }>;
+		  }
+		| undefined,
+) {
+	if (!userGroups) {
+		return budgetMembers;
+	}
+
+	const budgetByUserId = new Map(budgetMembers.map((member) => [member.id, member]));
+	const groupIdsByUserId = new Map<string, string[]>();
+	for (const membership of userGroups.memberships) {
+		groupIdsByUserId.set(membership.userId, [
+			...(groupIdsByUserId.get(membership.userId) ?? []),
+			membership.groupId,
+		]);
+	}
+
+	return userGroups.users.map((user) => {
+		const budget = budgetByUserId.get(user.id);
+		return {
+			id: user.id,
+			name: user.name,
+			email: user.email,
+			spendUsd: budget?.spendUsd ?? 0,
+			personalLimitUsd: budget?.personalLimitUsd ?? null,
+			groupIds: groupIdsByUserId.get(user.id) ?? [],
+		};
+	});
 }
 
 function UserGroupFeatures({
 	featureGrants,
 	onFeatureGrantsChange,
+	isDefaultGroup,
+	defaultAllowsProjectSharing,
+	projectSharing,
+	onProjectSharingChange,
 	toolCallDensityPolicy,
 	onToolCallDensityPolicyChange,
 }: {
 	featureGrants: UserGroupFeature[];
 	onFeatureGrantsChange: (featureGrants: UserGroupFeature[]) => void;
+	isDefaultGroup: boolean;
+	defaultAllowsProjectSharing: boolean | undefined;
+	projectSharing: ProjectSharingPermission;
+	onProjectSharingChange: (value: ProjectSharingPermission) => void;
 	toolCallDensityPolicy: ToolCallDensityPolicy;
 	onToolCallDensityPolicyChange: (policy: ToolCallDensityPolicy) => void;
 }) {
+	const offeredFeatures = useOfferedUserGroupFeatures();
 	return (
 		<div className='flex flex-col gap-6'>
 			<div className='flex flex-col gap-3'>
@@ -795,24 +1073,32 @@ function UserGroupFeatures({
 					<p className='text-xs text-muted-foreground'>Choose which product features this group can use.</p>
 				</div>
 				<div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
-					{USER_GROUP_FEATURE_DEFINITIONS.map((feature) => (
+					{offeredFeatures.map((feature) => (
 						<UserGroupFeatureCard
 							key={feature.key}
 							feature={feature}
 							selected={featureGrants.includes(feature.key)}
+							disabledReason={
+								featureGrants.includes(feature.key)
+									? undefined
+									: missingPrerequisiteReason(feature, featureGrants)
+							}
 							onSelectedChange={(selected) =>
-								onFeatureGrantsChange(
-									selected
-										? [...featureGrants, feature.key]
-										: featureGrants.filter((key) => key !== feature.key),
-								)
+								onFeatureGrantsChange(toggleFeatureGrant(featureGrants, feature.key, selected))
 							}
 						/>
 					))}
 				</div>
 			</div>
 
-			<div className='flex flex-col gap-3 border-t pt-5'>
+			<UserGroupProjectSharing
+				isDefaultGroup={isDefaultGroup}
+				defaultAllowed={defaultAllowsProjectSharing}
+				value={projectSharing}
+				onChange={onProjectSharingChange}
+			/>
+
+			<div className='flex flex-col gap-3'>
 				<div>
 					<h3 className='text-sm font-medium'>Tool call density</h3>
 					<p className='text-xs text-muted-foreground'>Set how tool calls appear for this group.</p>
@@ -859,8 +1145,12 @@ function haveSameDatabaseAccess(left: DatabaseContextAccess, right: DatabaseCont
 	);
 }
 
-function haveSameDocsAccess(left: DocsContextAccess, right: DocsContextAccess): boolean {
-	return JSON.stringify(normalizeDocsContextAccess(left)) === JSON.stringify(normalizeDocsContextAccess(right));
+function haveSameFileTreeAccess(left: FileTreeAccess, right: FileTreeAccess): boolean {
+	return JSON.stringify(normalizeFileTreeAccess(left)) === JSON.stringify(normalizeFileTreeAccess(right));
+}
+
+function haveSameMcpAccess(left: McpAccess, right: McpAccess): boolean {
+	return JSON.stringify(normalizeMcpAccess(left)) === JSON.stringify(normalizeMcpAccess(right));
 }
 
 function haveSameSsoMappings(left: UserGroupSsoMappings, right: UserGroupSsoMappings): boolean {
@@ -875,4 +1165,30 @@ function haveSameRowPolicies(left: UserGroupRowPolicies, right: UserGroupRowPoli
 	} catch {
 		return false;
 	}
+}
+
+/** Unchecking a feature also unchecks the ones that require it, so a group never grants a dependent feature alone. */
+function toggleFeatureGrant(
+	grants: UserGroupFeature[],
+	feature: UserGroupFeature,
+	selected: boolean,
+): UserGroupFeature[] {
+	if (selected) {
+		return [...grants, feature];
+	}
+	const dependents = USER_GROUP_FEATURE_DEFINITIONS.filter((definition) => definition.requires === feature).map(
+		(definition) => definition.key,
+	);
+	return grants.filter((key) => key !== feature && !dependents.includes(key));
+}
+
+function missingPrerequisiteReason(
+	feature: UserGroupFeatureDefinition,
+	grants: UserGroupFeature[],
+): string | undefined {
+	if (!feature.requires || grants.includes(feature.requires)) {
+		return undefined;
+	}
+	const prerequisite = USER_GROUP_FEATURE_DEFINITIONS.find((definition) => definition.key === feature.requires);
+	return `Requires ${prerequisite?.label ?? feature.requires}.`;
 }

@@ -1,10 +1,13 @@
-import type { UserGroupFeature, WarehouseRowSecurity } from '@nao/shared';
+import type { McpAccess, UserGroupFeature, WarehouseRowSecurity } from '@nao/shared';
 import type { UserRulesGroupAccess } from '@nao/shared/rules-template';
 import type { displayChart, displayMap } from '@nao/shared/tools';
 import type { LlmSelectedModel, SemanticLayerMode } from '@nao/shared/types';
 
 import type { WarehouseTableAccess } from '../services/context-access';
-import type { ResolvedDocsContextAccess } from '../services/user-group-context-access.service';
+import type {
+	ResolvedDocsContextAccess,
+	ResolvedFilesContextAccess,
+} from '../services/user-group-context-access.service';
 import { AgentSettings } from './agent-settings';
 
 export interface QueryResult {
@@ -37,6 +40,9 @@ export interface ToolContext {
 	warehouseTableAccess: WarehouseTableAccess;
 	warehouseRowSecurity: WarehouseRowSecurity;
 	docsContextAccess: ResolvedDocsContextAccess;
+	filesContextAccess: ResolvedFilesContextAccess;
+	/** MCP servers and tools the user's groups grant; spec files of other servers are hidden too. */
+	mcpAccess: McpAccess;
 	userGroupFeatures: UserGroupFeature[];
 	userRulesGroupAccess: UserRulesGroupAccess;
 	/**

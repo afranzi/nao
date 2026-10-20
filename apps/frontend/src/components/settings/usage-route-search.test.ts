@@ -26,9 +26,10 @@ describe('validateUsageSearch', () => {
 		expect(validateUsageSearch({ provider: 'toString' }).provider).toBe('all');
 	});
 
-	it('accepts context recommendations as a source', () => {
-		expect(validateUsageSearch({ sources: ['contextRecommendations'] }).sources).toEqual([
+	it('accepts background agent sources', () => {
+		expect(validateUsageSearch({ sources: ['contextRecommendations', 'onboarding'] }).sources).toEqual([
 			'contextRecommendations',
+			'onboarding',
 		]);
 	});
 
@@ -41,6 +42,26 @@ describe('validateUsageSearch', () => {
 		saveUsageFilters({ ...DEFAULT_USAGE_SEARCH, splitByUser: true });
 
 		expect(validateUsageSearchWithStoredFilters({}).splitByUser).toBe(true);
+	});
+
+	it('parses the expand replay toggle without persisting it', () => {
+		expect(validateUsageSearch({}).expandReplay).toBe(false);
+		expect(validateUsageSearch({ expandReplay: true }).expandReplay).toBe(true);
+		expect(validateUsageSearch({ expandReplay: 'true' }).expandReplay).toBe(true);
+
+		saveUsageFilters({ ...DEFAULT_USAGE_SEARCH, expandReplay: true });
+
+		expect(validateUsageSearchWithStoredFilters({}).expandReplay).toBe(false);
+	});
+
+	it('parses the chats search term without persisting it', () => {
+		expect(validateUsageSearch({ search: '  revenue  ' }).search).toBe('revenue');
+		expect(validateUsageSearch({ search: '   ' }).search).toBeUndefined();
+		expect(validateUsageSearch({ search: 42 }).search).toBeUndefined();
+
+		saveUsageFilters({ ...DEFAULT_USAGE_SEARCH, search: 'revenue' });
+
+		expect(validateUsageSearchWithStoredFilters({}).search).toBeUndefined();
 	});
 
 	it('ignores removed custom period parameters', () => {

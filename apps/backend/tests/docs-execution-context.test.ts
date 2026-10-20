@@ -138,6 +138,8 @@ function contextWithDocs(
 		projectFolder,
 		warehouseTableAccess: { enforced: false },
 		docsContextAccess: { enforced: true, access: { mode: 'restricted', grants } },
+		filesContextAccess: { enforced: false },
+		mcpAccess: { mode: 'all' },
 		userRulesGroupAccess: groupNames === null ? { enforced: false } : { enforced: true, groupNames },
 	} as ToolContext;
 }

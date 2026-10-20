@@ -5,7 +5,7 @@ import { Plus, PencilRuler, Database, Paperclip, AlertTriangle, Shield, Check } 
 import { ATTACHMENT_ACCEPT } from '@nao/shared/attachments';
 import { Button, ChatButton, MicButton } from './ui/button';
 import { SlidingWaveform } from './chat-input-sliding-waveform';
-import { ChatPrompt, STORY_MENTION_ID, DATABASE_MENTION_TRIGGER } from './chat-input-prompt';
+import { ChatPrompt, DATABASE_MENTION_TRIGGER, useStoryMentionOptions } from './chat-input-prompt';
 import { ChatInputModelSelect } from './chat-input-model-select';
 import { ChatInputMessageQueue } from './chat-input-message-queue';
 import { ChatInputAttachmentPreview } from './chat-input-attachment-preview';
@@ -16,8 +16,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import StoryIcon from './ui/story-icon';
-import type { PromptHandle, SelectedMention } from 'prompt-mentions';
+import type { MentionOption, PromptHandle, SelectedMention } from 'prompt-mentions';
 import type { FormEvent } from 'react';
 import type { AgentHelpers } from '@/hooks/use-agent';
 import { ContextWindowRing } from '@/components/ui/chat-input-context-window-ring';
@@ -44,12 +43,16 @@ import { useEffectiveUserGroupFeatures } from '@/hooks/use-effective-user-group-
 import { SelectionCitationBanner } from '@/components/selection-citation-banner';
 import { ChatInputSuggestions } from '@/components/chat-input-suggestions';
 import { runWithStoryBeforeAgentSend, useStoryBeforeAgentSend } from '@/contexts/story-before-agent-send';
+import { useIsCloud } from '@/hooks/use-nao-mode';
 
 const cycleModelShortcut = getShortcut('cycle-model').shortcut;
+
+type ChatInputVariant = 'default' | 'onboarding';
 
 type ChatInputBaseProps = {
 	promptRef: React.RefObject<PromptHandle | null>;
 	className?: string;
+	variant?: ChatInputVariant;
 	placeholder?: string;
 	initialText?: string;
 	onCancel?: () => void;
@@ -64,7 +67,7 @@ type ChatInputInlineProps = {
 	onSubmitMessage: AgentHelpers['queueOrSendMessage'];
 };
 
-export function ChatInput() {
+export function ChatInput({ variant = 'default' }: { variant?: ChatInputVariant }) {
 	const promptRef = useRef<PromptHandle>(null);
 	const { queueOrSendMessage } = useAgentContext();
 
@@ -76,7 +79,7 @@ export function ChatInput() {
 		requestAnimationFrame(() => promptRef.current?.focus());
 	});
 
-	return <ChatInputBase promptRef={promptRef} onSubmitMessage={queueOrSendMessage} allowQueueing />;
+	return <ChatInputBase promptRef={promptRef} variant={variant} onSubmitMessage={queueOrSendMessage} allowQueueing />;
 }
 
 export function ChatInputInline({ className, initialText, onCancel, onSubmitMessage }: ChatInputInlineProps) {
@@ -96,6 +99,7 @@ export function ChatInputInline({ className, initialText, onCancel, onSubmitMess
 function ChatInputBase({
 	promptRef,
 	className,
+	variant = 'default',
 	placeholder = 'Ask anything about your data...',
 	initialText,
 	onCancel,
@@ -113,10 +117,12 @@ function ChatInputBase({
 		submitQueuedMessageNow,
 		error,
 		selectedModel,
+		mode,
 	} = useAgentContext();
 	const navigate = useNavigate();
 	const { canChatWithNaoData } = usePermissions();
 	const { storyCreationEnabled } = useEffectiveUserGroupFeatures();
+	const storyMentionOptions = useStoryMentionOptions(storyCreationEnabled);
 	const chatId = useChatId();
 	const storyBeforeAgentSend = useStoryBeforeAgentSend();
 
@@ -133,13 +139,21 @@ function ChatInputBase({
 		navigate({ to: '/', search: { admin: true } });
 	}, [adminModeLocked, isAdminMode, setAdminMode, navigate]);
 	const { canCycleModels, cycleModel } = useModelSelection();
+	const project = useQuery(trpc.project.getCurrent.queryOptions());
+	const isTrial = useIsCloud() && project.data === null;
 	const uploadLimits = useQuery(trpc.storage.getUploadLimits.queryOptions());
 	const attachmentUpload = useAttachmentUpload({
 		documentsEnabled: uploadLimits.data?.enabled,
 		maxDocumentSizeMb: uploadLimits.data?.maxFileSizeMb ?? 0,
+		disabled: isTrial,
 	});
 	const chatInputRestore = useChatInputRestore(!!allowQueueing);
-	const effectivePlaceholder = isRunning && allowQueueing ? 'Add a follow-up...' : placeholder;
+	const effectivePlaceholder =
+		isRunning && allowQueueing
+			? 'Add a follow-up...'
+			: variant === 'onboarding'
+				? 'Tell me where you are starting from...'
+				: placeholder;
 
 	const agentSettings = useQuery(trpc.project.getAgentSettings.queryOptions());
 	const transcribeModels = useQuery(trpc.project.getKnownTranscribeModels.queryOptions());
@@ -302,6 +316,7 @@ function ChatInputBase({
 							end: citationSnapshot.end,
 							text: citationSnapshot.text,
 							storySlug: citationSnapshot.storySlug,
+							block: citationSnapshot.block,
 						}
 					: undefined;
 				if (hasCitation) {
@@ -393,7 +408,7 @@ function ChatInputBase({
 	);
 
 	return (
-		<div ref={dropZoneRef} className={cn('px-3 pb-3 pt-0 md:px-4 md:pb-4 max-w-3xl w-full mx-auto', className)}>
+		<div ref={dropZoneRef} className={cn('px-3 pb-3 pt-0 md:px-3 md:pb-3 max-w-3xl w-full mx-auto', className)}>
 			<ChatInputMessageQueue onEditMessage={handleEditQueuedMessage} onSubmitNow={submitQueuedMessageWithGuard} />
 			<SelectionCitationBanner />
 			<BudgetBanner />
@@ -403,7 +418,7 @@ function ChatInputBase({
 					isHidden={inputText.trim().length > 0}
 				/>
 			)}
-			{isAdminMode && <ChatInputAdminBadge />}
+			{isAdminMode ? <ChatInputAdminBadge /> : variant === 'onboarding' ? <ChatInputOnboardingBadge /> : null}
 
 			<form onSubmit={handleSubmitMessage} onKeyDown={handleKeyDown} className='mx-auto relative'>
 				<InputGroup
@@ -412,9 +427,10 @@ function ChatInputBase({
 						'bg-background dark:bg-background shadow-xs border-none max-md:rounded-4xl',
 						isDragging && 'ring-2 ring-primary/50 border-primary',
 						isAdminMode && 'ring-4 ring-amber-500/60',
+						!isAdminMode && variant === 'onboarding' && 'ring-4 ring-foreground/10',
 					)}
 				>
-					{!isAdminMode && <ChatInputAnimatedBorder />}
+					{!isAdminMode && variant === 'default' && <ChatInputAnimatedBorder />}
 					<ChatInputAttachmentPreview
 						attachments={attachmentUpload.attachments}
 						rejection={attachmentUpload.rejection}
@@ -433,6 +449,7 @@ function ChatInputBase({
 						type='file'
 						accept={ATTACHMENT_ACCEPT}
 						multiple
+						disabled={isTrial}
 						className='hidden'
 						onChange={attachmentUpload.handleFileInputChange}
 					/>
@@ -443,25 +460,25 @@ function ChatInputBase({
 						{isTranscribeReady && isRecording && <SlidingWaveform analyserRef={analyserRef} />}
 
 						<div className='flex items-center gap-1.5 md:gap-2 ml-auto relative'>
-							<ChatInputPlusMenu
-								hasDatabases={hasDatabases}
-								hasSkills={hasSkills}
-								storyCreationEnabled={storyCreationEnabled}
-								canChatWithNaoData={canChatWithNaoData}
-								isAdminMode={isAdminMode}
-								adminModeLocked={adminModeLocked}
-								onSelectAdminMode={handleSelectAdminMode}
-								onAddAttachment={attachmentUpload.openFilePicker}
-								onAddStory={() => {
-									promptRef.current?.appendMention(
-										{ id: STORY_MENTION_ID, label: 'Story mode' },
-										'#',
-									);
-								}}
-								onOpenSkills={openSkillsMenu}
-								onOpenDatabase={openDatabaseMenu}
-								onFocusPrompt={() => promptRef.current?.focus()}
-							/>
+							{mode !== 'onboarding' && (
+								<ChatInputPlusMenu
+									hasDatabases={hasDatabases}
+									hasSkills={hasSkills}
+									storyMentions={storyMentionOptions}
+									canChatWithNaoData={canChatWithNaoData}
+									isAdminMode={isAdminMode}
+									adminModeLocked={adminModeLocked}
+									isTrial={isTrial}
+									onSelectAdminMode={handleSelectAdminMode}
+									onAddAttachment={attachmentUpload.openFilePicker}
+									onAddStory={(mention) => {
+										promptRef.current?.appendMention({ id: mention.id, label: mention.label }, '#');
+									}}
+									onOpenSkills={openSkillsMenu}
+									onOpenDatabase={openDatabaseMenu}
+									onFocusPrompt={() => promptRef.current?.focus()}
+								/>
+							)}
 
 							{onCancel && (
 								<Button variant='ghost' type='button' size='sm' onClick={onCancel}>
@@ -472,11 +489,13 @@ function ChatInputBase({
 							<ContextWindowRing />
 
 							{isTranscribeReady && isRecording && <RecordingTimer />}
-							<MicButton
-								state={isTranscribeReady ? transcribeState : 'idle'}
-								onClick={isTranscribeReady ? toggleRecording : showMicWarning}
-								disabled={isRunning && !allowQueueing}
-							/>
+							{hasTranscribeProvider && (
+								<MicButton
+									state={isTranscribeReady ? transcribeState : 'idle'}
+									onClick={isTranscribeReady ? toggleRecording : showMicWarning}
+									disabled={isRunning && !allowQueueing}
+								/>
+							)}
 							{micWarning && <MicWarningBanner onDismiss={() => setMicWarning(false)} />}
 
 							{allowQueueing && isRunning ? (
@@ -630,6 +649,16 @@ function ChatInputAdminBadge() {
 	);
 }
 
+function ChatInputOnboardingBadge() {
+	return (
+		<div className='flex justify-end pr-4'>
+			<span className='mb-1 flex w-fit items-center rounded-t-lg bg-foreground/10 px-2 py-0.5 text-[10px] font-medium text-muted-foreground'>
+				Onboarding
+			</span>
+		</div>
+	);
+}
+
 function BudgetBanner() {
 	const { error, clearError, selectedModel } = useAgentContext();
 	const prevProviderRef = useRef(selectedModel?.provider);
@@ -670,10 +699,11 @@ function BudgetBanner() {
 function ChatInputPlusMenu({
 	hasDatabases,
 	hasSkills,
-	storyCreationEnabled,
+	storyMentions,
 	canChatWithNaoData,
 	isAdminMode,
 	adminModeLocked,
+	isTrial,
 	onSelectAdminMode,
 	onAddAttachment,
 	onAddStory,
@@ -683,13 +713,14 @@ function ChatInputPlusMenu({
 }: {
 	hasDatabases: boolean;
 	hasSkills: boolean;
-	storyCreationEnabled: boolean;
+	storyMentions: MentionOption[];
 	canChatWithNaoData: boolean;
 	isAdminMode: boolean;
 	adminModeLocked: boolean;
+	isTrial: boolean;
 	onSelectAdminMode: () => void;
 	onAddAttachment: () => void;
-	onAddStory: () => void;
+	onAddStory: (mention: MentionOption) => void;
 	onOpenSkills: () => void;
 	onOpenDatabase: () => void;
 	onFocusPrompt: () => void;
@@ -715,22 +746,24 @@ function ChatInputPlusMenu({
 					requestAnimationFrame(onFocusPrompt);
 				}}
 			>
-				<DropdownMenuItem onSelect={onAddAttachment}>
-					<Paperclip className='size-4' />
-					<span>Attach file</span>
-				</DropdownMenuItem>
+				{!isTrial && (
+					<DropdownMenuItem onSelect={onAddAttachment}>
+						<Paperclip className='size-4' />
+						<span>Attach file</span>
+					</DropdownMenuItem>
+				)}
 				{hasDatabases && (
 					<DropdownMenuItem onSelect={onOpenDatabase}>
 						<Database className='size-4' />
 						<span>Database tables</span>
 					</DropdownMenuItem>
 				)}
-				{storyCreationEnabled && (
-					<DropdownMenuItem onSelect={onAddStory}>
-						<StoryIcon className='size-4' />
-						<span>Story mode</span>
+				{storyMentions.map((mention) => (
+					<DropdownMenuItem key={mention.id} onSelect={() => onAddStory(mention)}>
+						{mention.icon}
+						<span>{mention.label}</span>
 					</DropdownMenuItem>
-				)}
+				))}
 				{hasSkills && (
 					<DropdownMenuItem onSelect={onOpenSkills}>
 						<PencilRuler className='size-4' />
@@ -785,14 +818,14 @@ function MicWarningBanner({ onDismiss }: { onDismiss: () => void }) {
 				&times;
 			</button>
 			<p className='text-sm'>
-				Voice input is not configured.{' '}
+				Voice input is disabled.{' '}
 				<Link
 					to='/settings/project/models'
 					className='font-medium text-primary underline underline-offset-2 hover:text-primary/80'
 				>
 					Go to Settings &rarr; Models
 				</Link>{' '}
-				to enable transcription and set up a provider. Ask your admin.
+				to enable transcription. Ask your admin.
 			</p>
 		</div>
 	);

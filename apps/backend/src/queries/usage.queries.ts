@@ -159,6 +159,10 @@ export const getMessagesUsage = async (projectId: string, filter: UsageFilter): 
 					sql<number>`count(distinct case when ${s.chatMessage.role} = 'user' and ${s.chatMessage.source} = 'mattermost' then ${s.chatMessage.id} end)`.as(
 						'mattermost_message_count',
 					),
+				discordMessageCount:
+					sql<number>`count(distinct case when ${s.chatMessage.role} = 'user' and ${s.chatMessage.source} = 'discord' then ${s.chatMessage.id} end)`.as(
+						'discord_message_count',
+					),
 				whatsappMessageCount:
 					sql<number>`count(distinct case when ${s.chatMessage.role} = 'user' and ${s.chatMessage.source} = 'whatsapp' then ${s.chatMessage.id} end)`.as(
 						'whatsapp_message_count',
@@ -202,6 +206,7 @@ export const getMessagesUsage = async (projectId: string, filter: UsageFilter): 
 				teamsMessageCount: sql<number>`0`.as('teams_message_count'),
 				telegramMessageCount: sql<number>`0`.as('telegram_message_count'),
 				mattermostMessageCount: sql<number>`0`.as('mattermost_message_count'),
+				discordMessageCount: sql<number>`0`.as('discord_message_count'),
 				whatsappMessageCount: sql<number>`0`.as('whatsapp_message_count'),
 				adminMessageCount: sql<number>`0`.as('admin_message_count'),
 				mcpMessageCount: sql<number>`0`.as('mcp_message_count'),
@@ -240,6 +245,7 @@ export const getMessagesUsage = async (projectId: string, filter: UsageFilter): 
 			teamsMessageCount: sum(combinedUsage.teamsMessageCount),
 			telegramMessageCount: sum(combinedUsage.telegramMessageCount),
 			mattermostMessageCount: sum(combinedUsage.mattermostMessageCount),
+			discordMessageCount: sum(combinedUsage.discordMessageCount),
 			whatsappMessageCount: sum(combinedUsage.whatsappMessageCount),
 			adminMessageCount: sum(combinedUsage.adminMessageCount),
 			mcpMessageCount: sum(combinedUsage.mcpMessageCount),
@@ -354,6 +360,27 @@ export const getTotalUsage = async (projectId: string, filter: UsageFilter): Pro
 	};
 };
 
+/**
+ * Distinct people who sent a message anywhere in the organization. Counted in a single
+ * pass across projects so somebody active in several of them is still one active user.
+ */
+export const getOrgActiveUserCount = async (orgId: string, period: UsagePeriodRange): Promise<number> => {
+	const lookbackTs = getLookbackTimestamp(period);
+	const lookbackFilter =
+		dbConfig.dialect === Dialect.Postgres
+			? sql`${s.chatMessage.createdAt} >= ${new Date(lookbackTs).toISOString()}`
+			: sql`${s.chatMessage.createdAt} >= ${lookbackTs}`;
+
+	const rows = await db
+		.select({ activeUsers: sql<number>`count(distinct ${MESSAGE_SENDER_EXPR})` })
+		.from(s.chatMessage)
+		.innerJoin(s.chat, eq(s.chatMessage.chatId, s.chat.id))
+		.innerJoin(s.project, eq(s.chat.projectId, s.project.id))
+		.where(and(eq(s.project.orgId, orgId), eq(s.chatMessage.role, 'user'), lookbackFilter));
+
+	return Number(rows[0]?.activeUsers ?? 0);
+};
+
 export const getUsedProviders = async (projectId: string): Promise<LlmProvider[]> => {
 	const [messageRows, inferenceRows] = await Promise.all([
 		db
@@ -386,6 +413,7 @@ function normalizeMessageUsageRow(row: {
 	teamsMessageCount: unknown;
 	telegramMessageCount: unknown;
 	mattermostMessageCount: unknown;
+	discordMessageCount: unknown;
 	whatsappMessageCount: unknown;
 	adminMessageCount: unknown;
 	mcpMessageCount: unknown;
@@ -413,6 +441,7 @@ function normalizeMessageUsageRow(row: {
 		teamsMessageCount: Number(row.teamsMessageCount ?? 0),
 		telegramMessageCount: Number(row.telegramMessageCount ?? 0),
 		mattermostMessageCount: Number(row.mattermostMessageCount ?? 0),
+		discordMessageCount: Number(row.discordMessageCount ?? 0),
 		whatsappMessageCount: Number(row.whatsappMessageCount ?? 0),
 		adminMessageCount: Number(row.adminMessageCount ?? 0),
 		mcpMessageCount: Number(row.mcpMessageCount ?? 0),

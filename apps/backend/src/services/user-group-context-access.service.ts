@@ -1,9 +1,12 @@
 import {
-	type DocsContextAccess,
+	ALL_MCP_ACCESS,
+	type FileTreeAccess,
+	type McpAccess,
 	type ProjectRowSecurity,
 	resolveWarehouseRowSecurity,
 	type UserGroupFeature,
 	type UserGroupRowPolicies,
+	type UserRole,
 	type WarehouseRowSecurity,
 } from '@nao/shared';
 import type { UserRulesGroupAccess } from '@nao/shared/rules-template';
@@ -18,20 +21,25 @@ import { resolveAvailableUserGroupAccess } from './user-group-availability.servi
 
 export * from './context-access';
 
-export type ResolvedDocsContextAccess = { enforced: false } | { enforced: true; access: DocsContextAccess };
+export type ResolvedFileTreeAccess = { enforced: false } | { enforced: true; access: FileTreeAccess };
+export type ResolvedDocsContextAccess = ResolvedFileTreeAccess;
+export type ResolvedFilesContextAccess = ResolvedFileTreeAccess;
 
 export async function resolveProjectContextAccess(
 	projectId: string,
 	userId: string,
 	projectFolder: string,
+	options: { projectAccessAlreadyAuthorized?: boolean } = {},
 ): Promise<{
 	warehouseTableAccess: WarehouseTableAccess;
 	warehouseRowSecurity: WarehouseRowSecurity;
 	docsContextAccess: ResolvedDocsContextAccess;
+	filesContextAccess: ResolvedFilesContextAccess;
+	mcpAccess: McpAccess;
 	userGroupFeatures: UserGroupFeature[];
 	userRulesGroupAccess: UserRulesGroupAccess;
 }> {
-	if (!(await getUserRoleInProject(projectId, userId))) {
+	if (!options.projectAccessAlreadyAuthorized && !(await getUserRoleInProject(projectId, userId))) {
 		throw new HandlerError('FORBIDDEN', 'You do not have access to this project.');
 	}
 
@@ -45,9 +53,23 @@ export async function resolveProjectContextAccess(
 		warehouseTableAccess: expandDatabaseAccess(effectiveAccess.databaseAccess, catalog),
 		warehouseRowSecurity: resolveRowSecurityAccess(rowSecurity, effectiveAccess.rowPolicies, rowSecurityLicensed),
 		docsContextAccess: { enforced: true, access: effectiveAccess.docsAccess },
+		filesContextAccess: { enforced: true, access: effectiveAccess.filesAccess },
+		mcpAccess: effectiveAccess.mcpAccess,
 		userGroupFeatures: effectiveAccess.features,
 		userRulesGroupAccess: { enforced: true, groupNames: effectiveAccess.groupNames },
 	};
+}
+
+/** Admins configure and connect every MCP server, so their settings are never narrowed by their own groups. */
+export async function resolveMcpSettingsAccess(
+	projectId: string,
+	userId: string,
+	role: UserRole | null,
+): Promise<McpAccess> {
+	if (role === 'admin') {
+		return ALL_MCP_ACCESS;
+	}
+	return (await resolveAvailableUserGroupAccess(projectId, userId)).mcpAccess;
 }
 
 export async function resolveWarehouseTableAccess(

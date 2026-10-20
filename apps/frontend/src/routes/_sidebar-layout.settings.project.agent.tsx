@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { isLlmProvider } from '@nao/shared/types';
+import type { LlmProvider } from '@nao/shared/types';
+import type { ProviderToEdit } from '@/components/settings/llm-providers-section';
 import type { TabBarItem } from '@/components/ui/tab-bar';
 
 import { DefaultModelsSection } from '@/components/settings/default-models-section';
@@ -23,6 +26,12 @@ import { trpc } from '@/main';
 
 type AgentTab = 'models' | 'tools' | 'mcp-servers';
 
+type AgentSearch = {
+	tab: AgentTab;
+	provider?: LlmProvider;
+	model?: string;
+};
+
 const tabs: TabBarItem<AgentTab>[] = [
 	{ id: 'models', label: 'Models' },
 	{ id: 'tools', label: 'Capabilities' },
@@ -35,16 +44,19 @@ export const Route = createFileRoute('/_sidebar-layout/settings/project/agent')(
 	staticData: {
 		title: 'Agent',
 	},
-	validateSearch: (search: Record<string, unknown>): { tab: AgentTab } => ({
+	validateSearch: (search: Record<string, unknown>): AgentSearch => ({
 		tab: search.tab === 'memory' ? 'tools' : isAgentTab(search.tab) ? search.tab : 'models',
+		provider: typeof search.provider === 'string' && isLlmProvider(search.provider) ? search.provider : undefined,
+		model: typeof search.model === 'string' ? search.model : undefined,
 	}),
 	component: ProjectAgentPage,
 });
 
 function ProjectAgentPage() {
-	const { tab } = Route.useSearch();
+	const { tab, provider, model } = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const { isAdmin } = usePermissions();
+	const providerToEdit = provider ? { provider, modelId: model } : undefined;
 
 	return (
 		<>
@@ -61,7 +73,13 @@ function ProjectAgentPage() {
 				className='border-b'
 			/>
 			<TabPanel idBase={tabIdBase} tabId={tab} className='flex flex-col gap-12'>
-				{tab === 'models' && <ModelsSettings isAdmin={isAdmin} />}
+				{tab === 'models' && (
+					<ModelsSettings
+						isAdmin={isAdmin}
+						providerToEdit={providerToEdit}
+						onProviderToEditOpened={() => navigate({ search: { tab }, replace: true })}
+					/>
+				)}
 				{tab === 'tools' && <ToolsSettings isAdmin={isAdmin} />}
 				{tab === 'mcp-servers' && <McpSettings isAdmin={isAdmin} />}
 			</TabPanel>
@@ -69,7 +87,15 @@ function ProjectAgentPage() {
 	);
 }
 
-function ModelsSettings({ isAdmin }: { isAdmin: boolean }) {
+function ModelsSettings({
+	isAdmin,
+	providerToEdit,
+	onProviderToEditOpened,
+}: {
+	isAdmin: boolean;
+	providerToEdit?: ProviderToEdit;
+	onProviderToEditOpened: () => void;
+}) {
 	const config = useQuery(trpc.system.getPublicConfig.queryOptions());
 	const subagentsEnabled = config.data?.betaSubagentsEnabled === true;
 
@@ -79,7 +105,11 @@ function ModelsSettings({ isAdmin }: { isAdmin: boolean }) {
 				title='LLM Configuration'
 				description='Configure the LLM providers for the agent in this project.'
 			>
-				<LlmProvidersSection isAdmin={isAdmin} />
+				<LlmProvidersSection
+					isAdmin={isAdmin}
+					providerToEdit={providerToEdit}
+					onProviderToEditOpened={onProviderToEditOpened}
+				/>
 			</SettingsCard>
 			<DefaultModelsSection isAdmin={isAdmin} />
 			{subagentsEnabled && <SubagentModelSection isAdmin={isAdmin} />}

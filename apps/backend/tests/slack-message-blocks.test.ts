@@ -7,9 +7,13 @@ import {
 	chunkSlackText,
 	countHiddenTableNotices,
 	createCompletionCard,
+	createMapLinkCard,
 	createSlackTableRenderState,
 	createStopButtonCard,
+	createTelegramCompletionCard,
+	createTelegramMapLinkCard,
 	createTextBlocks,
+	createWhatsappMapLink,
 	isRecoverableSlackPayloadError,
 	SLACK_SECTION_TEXT_MAX_CHARS,
 } from '../src/utils/messaging-provider';
@@ -195,9 +199,31 @@ describe('createTextBlocks', () => {
 		const text = ['| A | B | C |', '|---|---|---|', '| 1 | 2 |', '| 1 | 2 | 3 | 4 |'].join('\n');
 		const table = tableChild(createTextBlocks(text));
 		expect(table?.rows).toEqual([
-			['1', '2', ''],
+			['1', '2', '-'],
 			['1', '2', '3'],
 		]);
+	});
+
+	it('never sends an empty cell to Slack', () => {
+		const text = ['| region | count | note |', '|---|---|---|', '| EU | 3 |', '| US |  | x |', '| | | |'].join(
+			'\n',
+		);
+		const table = tableChild(createTextBlocks(text));
+		expect(table?.rows).toEqual([
+			['EU', '3', '-'],
+			['US', '-', 'x'],
+			['-', '-', '-'],
+		]);
+	});
+
+	it('fills empty header cells', () => {
+		const table = tableChild(createTextBlocks(['| name |  |', '|---|---|', '| a | b |'].join('\n')));
+		expect(table?.headers).toEqual(['name', '-']);
+	});
+
+	it('fills the missing cell of a row that is still streaming', () => {
+		const table = tableChild(createTextBlocks(['| id | name |', '|---|---|', '| 1'].join('\n')));
+		expect(table?.rows).toEqual([['1', '-']]);
 	});
 
 	it('does not treat pipe tables inside fenced code blocks as tables', () => {
@@ -596,7 +622,7 @@ describe('createCompletionCard', () => {
 		[1, 'Open the other table in nao'],
 		[3, 'Open the other 3 tables in nao'],
 	])('labels the link for %i hidden tables', (hiddenTables, label) => {
-		const card = createCompletionCard('https://nao.example/chats/chat-123', undefined, hiddenTables);
+		const card = createCompletionCard('https://nao.example/chats/chat-123', { hiddenTables });
 
 		expect(card.children[0]).toMatchObject({
 			type: 'actions',
@@ -615,6 +641,85 @@ describe('createCompletionCard', () => {
 		} else {
 			expect(actions.children[0]).toHaveProperty('style', 'primary');
 		}
+	});
+
+	it.each([
+		[0, 'Open in Fibi'],
+		[1, 'Open the other table in Fibi'],
+		[3, 'Open the other 3 tables in Fibi'],
+	])('uses the white-label app name for %i hidden tables', (hiddenTables, label) => {
+		const card = createCompletionCard('https://nao.example/chats/chat-123', { hiddenTables, appName: 'Fibi' });
+
+		expect(card.children[0]).toMatchObject({
+			type: 'actions',
+			children: [
+				{ type: 'link-button', label },
+				{ type: 'button', id: 'feedback_positive' },
+				{ type: 'button', id: 'feedback_negative' },
+			],
+		});
+	});
+});
+
+describe('white-label app name', () => {
+	it('labels the full-table link with the app name', () => {
+		const url = 'https://nao.example/chats/chat-123';
+		const rows = Array.from({ length: 150 }, (_, index) => `| row-${index} | value |`);
+		const children = createTextBlocks(['| Name | Value |', '|---|---|', ...rows].join('\n'), {
+			truncation: { kind: 'link', url },
+			appName: 'Fibi',
+		});
+
+		expect(children.at(-1)).toMatchObject({
+			type: 'actions',
+			children: [{ type: 'link-button', url, label: 'Open in Fibi to see full table' }],
+		});
+	});
+
+	it('mentions the app name in the omitted-rows note', () => {
+		const rows = Array.from({ length: 150 }, (_, index) => `| row-${index} | value |`);
+		const children = createTextBlocks(['| Name | Value |', '|---|---|', ...rows].join('\n'), { appName: 'Fibi' });
+
+		expect(children.at(-1)).toMatchObject({ type: 'text', content: '_…51 more rows, open in Fibi_' });
+	});
+
+	it('uses the app name in Slack notification text', () => {
+		const tableChildren = createTextBlocks(['| Name | Value |', '|---|---|', '| Alpha | 123 |'].join('\n'));
+		expect(buildSlackCardNotificationText(tableChildren, 'Fibi')).toBe(
+			'Results table (open in Fibi for full data)',
+		);
+
+		const actionsChildren = createCompletionCard('https://nao.example/chats/chat-123', {
+			appName: 'Fibi',
+		}).children;
+		expect(buildSlackCardNotificationText(actionsChildren, 'Fibi')).toBe('Fibi answer');
+	});
+
+	it('uses the app name in map link cards', () => {
+		const url = 'https://nao.example/chats/chat-123';
+
+		expect(createMapLinkCard('Stores', url, 'Fibi')[1]).toMatchObject({
+			type: 'actions',
+			children: [{ type: 'link-button', url, label: 'View interactive map in Fibi' }],
+		});
+		expect(createTelegramMapLinkCard('Stores', url, 'Fibi')[1]).toMatchObject({
+			type: 'actions',
+			children: [{ type: 'link-button', url, label: 'View interactive map in Fibi' }],
+		});
+		expect(createWhatsappMapLink('Stores', url, 'Fibi')).toBe(`🗺️ Stores\nView interactive map in Fibi: ${url}`);
+	});
+
+	it('uses the app name in the Telegram completion card', () => {
+		const card = createTelegramCompletionCard('https://nao.example/chats/chat-123', { appName: 'Fibi' });
+
+		expect(card.children[1]).toMatchObject({
+			type: 'actions',
+			children: [
+				{ type: 'link-button', label: 'Open in Fibi' },
+				{ type: 'button', id: 'feedback_positive' },
+				{ type: 'button', id: 'feedback_negative' },
+			],
+		});
 	});
 });
 
@@ -772,6 +877,17 @@ describe('buildSlackTableBlocks', () => {
 				{ type: 'raw_text', text: 'Bar' },
 			],
 		]);
+	});
+
+	it('renders every table cell with non-empty text, as Slack requires', () => {
+		const text = ['| region | count | note |', '|---|---|---|', '| EU | 3 |', '| US |  | x |'].join('\n');
+		const blocks = buildSlackTableBlocks(text) as AnyBlock[] | null;
+		const tableBlock = blocks?.find((block) => block.type === 'data_table') as
+			| { rows: { type: string; text: string }[][] }
+			| undefined;
+		const cells = tableBlock?.rows.flat() ?? [];
+		expect(cells.length).toBe(9);
+		expect(cells.every((cell) => cell.text.trim().length > 0)).toBe(true);
 	});
 
 	it("keeps the rendered table block within Slack's 10,000-character budget", () => {

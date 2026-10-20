@@ -16,6 +16,11 @@ dotenv.config({
 	path: path.join(process.cwd(), '..', '..', '.env'),
 });
 
+const optionalNonEmptyString = z
+	.string()
+	.optional()
+	.transform((value) => value?.trim() || undefined);
+
 const emittedDeprecationWarnings = new Set<string>();
 
 function resolveOidcGroupNaoRoleMapping(
@@ -145,6 +150,11 @@ const baseRawEnvSchema = z.object({
 		.transform((val) => val?.trim() || undefined)
 		.pipe(z.url({ message: 'GITLAB_REDIRECT_URI must be a valid URL' }).optional()),
 
+	CLOUD_GITHUB_PROJECT_ORG: optionalNonEmptyString,
+	CLOUD_GITHUB_PROJECT_APP_ID: optionalNonEmptyString,
+	CLOUD_GITHUB_PROJECT_INSTALLATION_ID: optionalNonEmptyString,
+	CLOUD_GITHUB_PROJECT_PRIVATE_KEY: optionalNonEmptyString,
+
 	AZURE_AD_CLIENT_ID: z.string().optional(),
 	AZURE_AD_CLIENT_SECRET: z.string().optional(),
 	AZURE_AD_TENANT_ID: z.string().optional(),
@@ -247,6 +257,36 @@ const baseRawEnvSchema = z.object({
 	NAO_CONTEXT_GIT_TOKEN: z.string().optional(),
 	NAO_CONTEXT_GIT_SSH_KEY: z.string().optional(),
 	NAO_CONTEXT_GIT_PLATFORM: z.enum(['github', 'gitlab', 'bitbucket']).optional(),
+
+	CLOUD_BILLING_ENABLED: z
+		.enum(['true', 'false'])
+		.optional()
+		.default('false')
+		.transform((val) => val === 'true'),
+	STRIPE_SECRET_KEY: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
+	STRIPE_WEBHOOK_SECRET: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
+	STRIPE_CLOUD_PRODUCT_ID: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
+	STRIPE_CLOUD_MONTHLY_PRICE_LOOKUP_KEY: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
+	STRIPE_CLOUD_YEARLY_PRICE_LOOKUP_KEY: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
+	STRIPE_PORTAL_CONFIGURATION_ID: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
 
 	NAO_STORAGE_BACKEND: z.enum(['none', 'local', 's3']).default('local'),
 	NAO_STORAGE_LOCAL_PATH: z.string().default('./storage'),
@@ -395,13 +435,19 @@ const baseRawEnvSchema = z.object({
 	BETA_CONTEXT_RECOMMENDATIONS_ENABLED: z
 		.enum(['true', 'false'])
 		.optional()
-		.default('false')
+		.default('true')
 		.transform((val) => val === 'true'),
 
 	BETA_STORY_FILTERS_ENABLED: z
 		.enum(['true', 'false'])
 		.optional()
 		.default('true')
+		.transform((val) => val === 'true'),
+
+	BETA_CUSTOM_STORIES_ENABLED: z
+		.enum(['true', 'false'])
+		.optional()
+		.default('false')
 		.transform((val) => val === 'true'),
 
 	BETA_SUBAGENTS_ENABLED: z
@@ -414,6 +460,24 @@ const baseRawEnvSchema = z.object({
 const rawEnvSchema = z.preprocess(resolveDeprecatedEnvAliases, baseRawEnvSchema);
 const envSchema = rawEnvSchema
 	.superRefine((data, ctx) => {
+		if (isCloudBillingEnabled(data)) {
+			for (const variable of [
+				'STRIPE_SECRET_KEY',
+				'STRIPE_WEBHOOK_SECRET',
+				'STRIPE_CLOUD_PRODUCT_ID',
+				'STRIPE_CLOUD_MONTHLY_PRICE_LOOKUP_KEY',
+				'STRIPE_CLOUD_YEARLY_PRICE_LOOKUP_KEY',
+			] as const) {
+				if (!data[variable]) {
+					ctx.addIssue({
+						code: 'custom',
+						path: [variable],
+						message: `${variable} is required when cloud billing is enabled`,
+					});
+				}
+			}
+		}
+
 		if (!data.SLACK_BOT_TOKEN) {
 			if (data.SLACK_SIGNING_SECRET || data.SLACK_APP_TOKEN || data.SLACK_TRANSPORT_MODE) {
 				ctx.addIssue({
@@ -438,6 +502,31 @@ const envSchema = rawEnvSchema
 				path: ['SLACK_SIGNING_SECRET'],
 				message: 'SLACK_SIGNING_SECRET is required when Slack runs in webhook mode',
 			});
+		}
+	})
+	.superRefine((data, ctx) => {
+		const fields = [
+			'CLOUD_GITHUB_PROJECT_ORG',
+			'CLOUD_GITHUB_PROJECT_APP_ID',
+			'CLOUD_GITHUB_PROJECT_INSTALLATION_ID',
+			'CLOUD_GITHUB_PROJECT_PRIVATE_KEY',
+		] as const;
+		const managedGithubIsConfigured = fields.some((field) => !!data[field]);
+		if (data.NAO_MODE !== 'cloud' && !managedGithubIsConfigured) {
+			return;
+		}
+
+		for (const field of fields) {
+			if (!data[field]) {
+				ctx.addIssue({
+					code: 'custom',
+					path: [field],
+					message:
+						data.NAO_MODE === 'cloud'
+							? `${field} is required when NAO_MODE=cloud`
+							: `${field} is required when managed GitHub project provisioning is configured`,
+				});
+			}
 		}
 	})
 	// Refresh tokens must outlive access tokens, otherwise a client can hold a valid
@@ -497,6 +586,12 @@ export function __reloadEnvForTesting(): void {
 
 export const isCloud = env.NAO_MODE === 'cloud';
 export const isSelfHosted = env.NAO_MODE === 'self-hosted';
+
+export function isCloudBillingEnabled(
+	data: Pick<z.output<typeof baseRawEnvSchema>, 'NAO_MODE' | 'CLOUD_BILLING_ENABLED'> = env,
+): boolean {
+	return data.NAO_MODE === 'cloud' && data.CLOUD_BILLING_ENABLED;
+}
 
 const normalizedBaseUrl = env.BETTER_AUTH_URL.replace(/\/+$/, '');
 export const MCP_SERVER_URL = `${normalizedBaseUrl}/mcp`;

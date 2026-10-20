@@ -1,3 +1,5 @@
+export const SYSTEM_EXAMPLE_PROJECT_ID = 'system-example-project';
+
 export * from './assistant-tags';
 export * from './attachments';
 export * from './background-models';
@@ -7,6 +9,7 @@ export * from './chart-data-labels';
 export * from './chart-domain';
 export * from './chart-fonts';
 export * from './chart-plugin';
+export * from './chart-style';
 export * from './chart-values';
 export * from './citation';
 export * from './context-recommendation';
@@ -22,6 +25,7 @@ export * from './sql-template';
 export * from './types';
 export * from './user-group-context';
 export * from './user-group-features';
+export * from './user-group-mcp';
 export * from './user-group-row-security';
 export * from './user-group-sso-mapping';
 export * from './utils';

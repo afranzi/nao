@@ -64,12 +64,13 @@ export async function createNewProject({
 	sourceDir,
 	projectName,
 	orgId,
+	projectId = crypto.randomUUID(),
 }: {
 	sourceDir: string;
 	projectName: string;
 	orgId: string;
+	projectId?: string;
 }) {
-	const projectId = crypto.randomUUID();
 	const projectDir = path.resolve(env.NAO_PROJECTS_DIR, projectId);
 
 	try {
@@ -83,6 +84,7 @@ export async function createNewProject({
 	}
 
 	const project = await projectQueries.createProject({
+		id: projectId,
 		name: projectName,
 		type: 'local',
 		path: projectDir,
@@ -98,11 +100,20 @@ export async function replaceExistingProject({
 	sourceDir,
 	project,
 	projectName,
+	userId,
 }: {
 	sourceDir: string;
 	project: DBProject;
 	projectName: string;
+	userId: string;
 }) {
+	const role = await projectQueries.getUserRoleInProject(project.id, userId);
+	if (role !== 'admin' && role !== 'context_admin') {
+		throw new TRPCError({
+			code: 'FORBIDDEN',
+			message: `Only admins or context admins of "${projectName}" can replace it.`,
+		});
+	}
 	if (!project.path) {
 		throw new TRPCError({ code: 'BAD_REQUEST', message: 'Project path not configured' });
 	}

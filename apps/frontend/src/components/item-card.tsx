@@ -1,4 +1,4 @@
-import { Activity, Dot, Globe, Lock, Users } from 'lucide-react';
+import { Activity, Dot, Globe, Lock, ShieldCheck, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { StoryPanelDisplayMode, Visibility } from '@nao/shared/types';
 import { SimpleTooltip } from '@/components/ui/tooltip';
@@ -11,7 +11,10 @@ export const GRID_CARD_CLASS =
 export const LINES_CARD_CLASS = 'group flex items-center gap-3 rounded-md px-3 py-2 hover:bg-sidebar-accent';
 
 export const GRID_THUMBNAIL_CLASS =
-	'absolute top-0 left-0 right-0 bottom-12 pointer-events-none overflow-hidden bg-sidebar dark:bg-background mx-1 mt-1 mb-2 rounded-lg';
+	'absolute top-0 left-0 right-0 bottom-12 pointer-events-none overflow-hidden bg-background dark:bg-background mx-1 mt-1 mb-2 rounded-lg';
+
+export const GRID_HOVER_ACTION_GRADIENT_CLASS =
+	'pointer-events-none absolute inset-x-0 top-0 z-[1] h-16 bg-gradient-to-b from-background/95 via-background/70 to-transparent opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 dark:from-background/95 dark:via-background/75';
 
 export function CardsSection({
 	title,
@@ -89,6 +92,17 @@ export function LiveBadge() {
 	);
 }
 
+export function CertifiedBadge({ certifiedByName }: { certifiedByName?: string | null }) {
+	return (
+		<SimpleTooltip content={certifiedByName ? `Certified by ${certifiedByName}` : 'Certified by an admin'}>
+			<span className='inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300'>
+				<ShieldCheck className='size-3' />
+				<span className='text-[11px] font-medium truncate'>Certified</span>
+			</span>
+		</SimpleTooltip>
+	);
+}
+
 export function PrivateBadge({ label = 'Private story' }: { label?: string }) {
 	return (
 		<SimpleTooltip content={label}>
@@ -99,12 +113,20 @@ export function PrivateBadge({ label = 'Private story' }: { label?: string }) {
 	);
 }
 
-export function SharingBadge({ visibility, sharedWithCount }: { visibility: Visibility; sharedWithCount?: number }) {
+export function SharingBadge({
+	visibility,
+	sharedWithCount,
+	sharedWithGroupCount,
+}: {
+	visibility: Visibility;
+	sharedWithCount?: number;
+	sharedWithGroupCount?: number;
+}) {
 	const tooltip =
 		visibility === 'project'
 			? 'Shared with the project'
 			: sharedWithCount != null
-				? `Shared with ${sharedWithCount} user${sharedWithCount !== 1 ? 's' : ''}`
+				? `Shared with ${formatSharedWith(sharedWithCount, sharedWithGroupCount ?? 0)}`
 				: 'Shared with specific people';
 
 	return (
@@ -114,4 +136,13 @@ export function SharingBadge({ visibility, sharedWithCount }: { visibility: Visi
 			</span>
 		</SimpleTooltip>
 	);
+}
+
+function formatSharedWith(userCount: number, groupCount: number): string {
+	const users = `${userCount} user${userCount !== 1 ? 's' : ''}`;
+	if (groupCount === 0) {
+		return users;
+	}
+	const groups = `${groupCount} group${groupCount !== 1 ? 's' : ''}`;
+	return userCount === 0 ? groups : `${users} and ${groups}`;
 }

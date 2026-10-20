@@ -1,5 +1,5 @@
 import { ALLOWED_IMAGE_MEDIA_TYPES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_IMAGE_SIZE_MB } from '@nao/shared/attachments';
-import { type CitationData } from '@nao/shared/types';
+import { type CitationData, type LlmProvider } from '@nao/shared/types';
 import {
 	DynamicToolUIPart,
 	FinishReason,
@@ -29,6 +29,7 @@ export interface UIChat {
 	projectId: string;
 	title: string;
 	isStarred: boolean;
+	isOnboarding?: boolean;
 	createdAt: number;
 	updatedAt: number;
 	messages: UIMessage[];
@@ -37,6 +38,13 @@ export interface UIChat {
 		DBAutomationRun,
 		'id' | 'automationId' | 'status' | 'startedAt' | 'completedAt' | 'errorMessage'
 	>;
+}
+
+/** The model that generated an assistant message. */
+export interface MessageModel {
+	provider: LlmProvider;
+	modelId: string;
+	name: string;
 }
 
 export interface ChatListItem {
@@ -53,11 +61,13 @@ export const MESSAGE_SOURCES = [
 	'teams',
 	'telegram',
 	'mattermost',
+	'discord',
 	'whatsapp',
 	'web',
 	'mcp',
 	'contextRecommendations',
 	'admin',
+	'onboarding',
 ] as const;
 
 export type MessageSource = (typeof MESSAGE_SOURCES)[number];
@@ -68,6 +78,8 @@ export type UIMessage = UIGenericMessage<unknown, MessageCustomDataParts, UITool
 	isForked?: boolean;
 	citation?: CitationData;
 	stopReason?: StopReason;
+	/** Provider that generated an assistant message. */
+	llmProvider?: LlmProvider;
 	/** Epoch milliseconds the message was created at. */
 	createdAt?: number;
 	/** Edit/resend version history for a user message turn. */
@@ -180,6 +192,7 @@ const CitationDataSchema = z.object({
 	end: z.number(),
 	text: z.string(),
 	storySlug: z.string().optional(),
+	block: z.object({ kind: z.string(), title: z.string().optional(), queryId: z.string().optional() }).optional(),
 });
 
 export type AgentRequestUserMessage = z.infer<typeof AgentRequestUserMessageSchema>;
@@ -200,4 +213,5 @@ export const AgentRequestSchema = z.object({
 	timezone: z.string().optional(),
 	/** When true, the message runs in admin mode: it queries nao's own usage database instead of the warehouse. */
 	adminMode: z.boolean().optional(),
+	mode: z.enum(['default', 'onboarding', 'example']).default('default'),
 });

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import type { ShareSource } from '@nao/shared/types';
 
 import type { AnchorPosition } from '@/lib/selection-dom.utils';
 import {
@@ -11,13 +12,9 @@ import {
 	measureRangePosition,
 } from '@/lib/selection-dom.utils';
 import { trpc } from '@/main';
+import { useMemoObject } from '@/hooks/useMemoObject';
 
 export type { AnchorPosition };
-
-export interface PersistenceConfig {
-	shareId: string;
-	contentType: 'chat' | 'story';
-}
 
 export interface SelectionState {
 	text: string;
@@ -72,11 +69,11 @@ export const useOptionalSelection = () => useContext(SelectionContext);
 
 export const SelectionProvider = ({
 	children,
-	persistenceConfig,
+	persistenceSource,
 	resetKey,
 }: {
 	children: React.ReactNode;
-	persistenceConfig?: PersistenceConfig;
+	persistenceSource?: ShareSource;
 	resetKey?: string;
 }) => {
 	const [selection, setSelection] = useState<SelectionState | null>(null);
@@ -99,10 +96,9 @@ export const SelectionProvider = ({
 
 	const selectionForksQuery = useQuery({
 		...trpc.chatFork.getSelectionForks.queryOptions({
-			shareId: persistenceConfig?.shareId ?? '',
-			type: persistenceConfig?.contentType ?? 'chat',
+			source: persistenceSource ?? { type: 'chat', shareId: '' },
 		}),
-		enabled: !!persistenceConfig,
+		enabled: !!persistenceSource,
 	});
 
 	useEffect(() => {
@@ -196,22 +192,24 @@ export const SelectionProvider = ({
 		return measureRangePosition(containerRef.current, start, end);
 	}, []);
 
+	const clearSelection = useCallback(() => setSelection(null), []);
+
+	const value = useMemoObject({
+		selection,
+		clearSelection,
+		containerRef,
+		anchors,
+		openAnchorChatId,
+		addAnchor,
+		resolveAnchor,
+		removeAnchor,
+		openAnchor,
+		closePanel,
+		measureAnchorPosition,
+	});
+
 	return (
-		<SelectionContext.Provider
-			value={{
-				selection,
-				clearSelection: () => setSelection(null),
-				containerRef,
-				anchors,
-				openAnchorChatId,
-				addAnchor,
-				resolveAnchor,
-				removeAnchor,
-				openAnchor,
-				closePanel,
-				measureAnchorPosition,
-			}}
-		>
+		<SelectionContext.Provider value={value}>
 			<div ref={containerRef} onMouseUp={handleMouseUp} style={{ display: 'contents' }}>
 				{children}
 			</div>

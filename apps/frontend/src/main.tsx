@@ -12,7 +12,8 @@ import { ThemeProvider } from './contexts/theme.provider';
 import { McpProvider } from './contexts/mcp';
 import { TooltipProvider } from './components/ui/tooltip';
 import { getActiveOrganizationId } from './lib/active-organization';
-import { getActiveProjectId } from './lib/active-project';
+import { createActiveOrganizationRecovery } from './lib/active-organization-recovery';
+import { getActiveProjectId, getProjectRequestHeaders } from './lib/active-project';
 import { routeTree } from './routeTree.gen';
 import reportWebVitals from './reportWebVitals';
 import type { TrpcRouter } from '@nao/backend/trpc';
@@ -48,18 +49,29 @@ export const queryClient = new QueryClient({
 	},
 });
 
+const activeOrganizationRecovery = createActiveOrganizationRecovery({
+	invalidateQueries: () => void queryClient.invalidateQueries(),
+	invalidateRouter: () => void router.invalidate(),
+});
+
 /** TRPC client for typed requests to the backend */
 export const trpcClient = createTRPCClient<TrpcRouter>({
 	links: [
 		loggerLink(),
+		activeOrganizationRecovery.link,
 		httpBatchLink({
 			url: '/api/trpc',
 			transformer: superjson,
-			headers() {
+			maxURLLength: 4000,
+			headers({ opList }) {
 				const activeProjectId = getActiveProjectId();
 				const activeOrganizationId = getActiveOrganizationId();
+				activeOrganizationRecovery.trackRequests(
+					opList.map((operation) => operation.id),
+					{ organizationId: activeOrganizationId, projectId: activeProjectId },
+				);
 				return {
-					...(activeProjectId ? { 'x-nao-project-id': activeProjectId } : {}),
+					...getProjectRequestHeaders(),
 					...(activeOrganizationId ? { 'x-nao-organization-id': activeOrganizationId } : {}),
 				};
 			},

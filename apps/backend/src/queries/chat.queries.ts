@@ -43,12 +43,19 @@ const chatUpdatedAtMs =
 
 const sqlFalse = dbConfig.dialect === Dialect.Postgres ? sql<boolean>`false` : sql<boolean>`0`;
 
+const isOnboardingExpr = sql<boolean>`exists(
+	select 1 from ${s.chatMessage}
+	where ${s.chatMessage.chatId} = ${s.chat.id}
+	and ${s.chatMessage.source} = 'onboarding'
+)`.mapWith(Boolean);
+
 const sourcePlatformExpr = sql<SourcePlatform>`case
 	when ${s.chat.slackThreadId} is not null then 'Slack'
 	when ${s.chat.teamsThreadId} is not null then 'Teams'
 	when ${s.chat.whatsappThreadId} is not null then 'WhatsApp'
 	when ${s.chat.telegramThreadId} is not null then 'Telegram'
 	when ${s.chat.mattermostThreadId} is not null then 'Mattermost'
+	when ${s.chat.discordThreadId} is not null then 'Discord'
 	when exists(
 		select 1 from ${s.chatMessage}
 		where ${s.chatMessage.chatId} = ${s.chat.id}
@@ -91,6 +98,7 @@ async function listOwnChats(userId: string): Promise<EnrichedChat[]> {
 			id: s.chat.id,
 			title: s.chat.title,
 			isStarred: s.chat.isStarred,
+			isOnboarding: isOnboardingExpr,
 			createdAt: chatCreatedAtMs,
 			updatedAt: chatUpdatedAtMs,
 			kind: sql<'own'>`'own'`,
@@ -115,6 +123,7 @@ async function listSharedWithMeChats(userId: string): Promise<EnrichedChat[]> {
 			id: s.sharedChat.chatId,
 			title: s.chat.title,
 			isStarred: sqlFalse,
+			isOnboarding: isOnboardingExpr,
 			createdAt: chatCreatedAtMs,
 			updatedAt: chatUpdatedAtMs,
 			kind: sql<'shared'>`'shared'`,
@@ -137,6 +146,7 @@ async function listSharedWithMeChats(userId: string): Promise<EnrichedChat[]> {
 			and(
 				isNull(s.chat.deletedAt),
 				isNotAutomationRunChat(),
+				isNotOnboardingChat(),
 				ne(s.chat.userId, userId),
 				or(
 					and(
@@ -193,6 +203,7 @@ export const getChat = async (
 			projectId: chat.projectId,
 			title: chat.title,
 			isStarred: chat.isStarred,
+			isOnboarding: messages.some((message) => message.source === 'onboarding'),
 			createdAt: chat.createdAt.getTime(),
 			updatedAt: chat.updatedAt.getTime(),
 			messages: messagesWithVersions,
@@ -273,6 +284,7 @@ const aggregateChatMessagParts = (
 					isForked: row.chat_message.isForked ?? undefined,
 					citation: row.chat_message.citation ?? undefined,
 					stopReason: row.chat_message.stopReason ?? undefined,
+					llmProvider: row.chat_message.llmProvider ?? undefined,
 					createdAt: row.chat_message.createdAt?.getTime(),
 				};
 			}
@@ -731,6 +743,31 @@ export const getLastAssistantMessageId = async (chatId: string): Promise<string 
 	return result?.id ?? null;
 };
 
+export const attachDiscordMessageId = async (messageId: string, discordMessageId: string): Promise<void> => {
+	await db.update(s.chatMessage).set({ discordMessageId }).where(eq(s.chatMessage.id, messageId)).execute();
+};
+
+export const getAssistantMessageIdByDiscordMessage = async (
+	discordMessageId: string,
+	projectId: string,
+): Promise<string | null> => {
+	const [result] = await db
+		.select({ id: s.chatMessage.id })
+		.from(s.chatMessage)
+		.innerJoin(s.chat, eq(s.chatMessage.chatId, s.chat.id))
+		.where(
+			and(
+				eq(s.chatMessage.discordMessageId, discordMessageId),
+				eq(s.chatMessage.role, 'assistant'),
+				isNull(s.chatMessage.supersededAt),
+				eq(s.chat.projectId, projectId),
+			),
+		)
+		.limit(1)
+		.execute();
+	return result?.id ?? null;
+};
+
 export const isAssistantMessageInProject = async (messageId: string, projectId: string): Promise<boolean> => {
 	const [result] = await db
 		.select({ id: s.chatMessage.id })
@@ -792,6 +829,20 @@ export const attachMattermostThread = async (chatId: string, mattermostThreadId:
 	await db.update(s.chat).set({ mattermostThreadId }).where(eq(s.chat.id, chatId)).execute();
 };
 
+export const getChatByDiscordThread = async (threadId: string): Promise<{ id: string; title: string } | null> => {
+	const result = await db
+		.select({ id: s.chat.id, title: s.chat.title })
+		.from(s.chat)
+		.where(eq(s.chat.discordThreadId, threadId))
+		.limit(1)
+		.execute();
+	return result.at(0) || null;
+};
+
+export const attachDiscordThread = async (chatId: string, discordThreadId: string): Promise<void> => {
+	await db.update(s.chat).set({ discordThreadId }).where(eq(s.chat.id, chatId)).execute();
+};
+
 export const getChatByWhatsappThread = async (threadId: string): Promise<{ id: string; title: string } | null> => {
 	const result = await db
 		.select({ id: s.chat.id, title: s.chat.title })
@@ -848,6 +899,7 @@ export const searchUserChats = async (userId: string, query: string, limit = 10)
 				eq(s.chat.userId, userId),
 				isNull(s.chat.deletedAt),
 				isNotAutomationRunChat(),
+				isNotOnboardingChat(),
 				caseInsensitiveLike(s.chat.title, searchPattern),
 			),
 		)
@@ -874,6 +926,7 @@ export const searchUserChats = async (userId: string, query: string, limit = 10)
 				eq(s.chat.userId, userId),
 				isNull(s.chat.deletedAt),
 				isNotAutomationRunChat(),
+				isNotOnboardingChat(),
 				caseInsensitiveLike(s.messagePart.text, searchPattern),
 			),
 		)
@@ -918,9 +971,17 @@ const isNotAutomationRunChat = () => {
 	return sql`not exists (select 1 from ${s.automationRun} where ${s.automationRun.chatId} = ${s.chat.id})`;
 };
 
-export const getSelectionForksByShareId = async (
+const isNotOnboardingChat = () => {
+	return sql`not exists (
+		select 1 from ${s.chatMessage}
+		where ${s.chatMessage.chatId} = ${s.chat.id}
+		and ${s.chatMessage.source} = 'onboarding'
+	)`;
+};
+
+export const getSelectionForksBySourceId = async (
 	userId: string,
-	shareId: string,
+	sourceId: string,
 	forkType: 'chat_selection' | 'story_selection',
 ): Promise<{ chatId: string; selectionStart: number; selectionEnd: number; selectionText: string }[]> => {
 	const typeFilter =
@@ -930,8 +991,8 @@ export const getSelectionForksByShareId = async (
 
 	const idFilter =
 		dbConfig.dialect === Dialect.Postgres
-			? sql`${s.chat.forkMetadata}->>'id' = ${shareId}`
-			: sql`json_extract(${s.chat.forkMetadata}, '$.id') = ${shareId}`;
+			? sql`${s.chat.forkMetadata}->>'id' = ${sourceId}`
+			: sql`json_extract(${s.chat.forkMetadata}, '$.id') = ${sourceId}`;
 
 	const results = await db
 		.select({ id: s.chat.id, forkMetadata: s.chat.forkMetadata })
@@ -970,6 +1031,25 @@ export const getChatProjectId = async (chatId: string): Promise<string | undefin
 	return result?.projectId;
 };
 
+export const getActiveChatProjectId = async (chatId: string): Promise<string | undefined> => {
+	const [result] = await db
+		.select({ projectId: s.chat.projectId })
+		.from(s.chat)
+		.where(and(eq(s.chat.id, chatId), isNull(s.chat.deletedAt)))
+		.execute();
+	return result?.projectId;
+};
+
+export const isOnboardingChat = async (chatId: string): Promise<boolean> => {
+	const [result] = await db
+		.select({ id: s.chatMessage.id })
+		.from(s.chatMessage)
+		.where(and(eq(s.chatMessage.chatId, chatId), eq(s.chatMessage.source, 'onboarding')))
+		.limit(1)
+		.execute();
+	return Boolean(result);
+};
+
 export const getLatestAssistantModel = async (
 	chatId: string,
 ): Promise<{ provider: LlmProvider; modelId: string } | null> => {
@@ -994,6 +1074,29 @@ export const getLatestAssistantModel = async (
 	}
 
 	return { provider: result.provider, modelId: result.modelId };
+};
+
+export const getAssistantMessageModels = async (
+	chatId: string,
+): Promise<Array<{ messageId: string; provider: LlmProvider; modelId: string }>> => {
+	const rows = await db
+		.select({ messageId: s.chatMessage.id, provider: s.chatMessage.llmProvider, modelId: s.chatMessage.llmModelId })
+		.from(s.chatMessage)
+		.where(
+			and(
+				eq(s.chatMessage.chatId, chatId),
+				eq(s.chatMessage.role, 'assistant'),
+				isNull(s.chatMessage.supersededAt),
+				isNotNull(s.chatMessage.llmProvider),
+				isNotNull(s.chatMessage.llmModelId),
+			),
+		)
+		.orderBy(asc(s.chatMessage.createdAt))
+		.execute();
+
+	return rows.flatMap(({ messageId, provider, modelId }) =>
+		provider && modelId ? [{ messageId, provider, modelId }] : [],
+	);
 };
 
 export const getProjectIdByQueryId = async (queryId: string): Promise<string | undefined> => {

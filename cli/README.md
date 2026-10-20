@@ -251,12 +251,25 @@ Connects the CLI to your nao account: it opens the app in your browser, asks you
 nao test
 ```
 
-Runs test cases defined as YAML files in `tests/`. Each test has a `name`, `prompt`, and expected `sql`. Results are saved to `tests/outputs/`.
+Runs test cases defined as YAML files in `tests/`. Each test has a `name`, `prompt`, and optional expected `sql` and/or `assertions`. Results are saved to `tests/outputs/`.
+
+Final-output checks use reference `sql` (dataframe equality). Intermediate agent actions use `assertions` against the run's tool-call trace — for example, requiring a clarifying follow-up:
+
+```yaml
+name: ambiguous_revenue_period
+prompt: What was the revenue?
+assertions:
+  - type: tool_call
+    tool: clarification
+```
+
+`tool_call` assertions can also require a specific tool (e.g. `execute_sql`), optional arg subset match via `args` (omit it to match any call; an empty mapping is rejected), and `min_count`. SQL verification and assertions can be combined; the run passes only if every check passes. A test file with an invalid `assertions` block fails the whole run instead of being skipped.
 
 Options:
 
 - `--model` / `-m`: Models to test against (default: `openai:gpt-4.1`). Can be specified multiple times.
 - `--threads` / `-t`: Number of parallel threads (default: `1`)
+- `--k` / `-k`: Number of times to run each test case, used to compute pass@k and pass^k (default: `1`)
 - `--select` / `-s`: Run only selected tests by name, yaml stem, or subfolder. Comma-separated.
 - `--username` / `-u`, `--password`: Credentials for the nao backend, for non-interactive runs. Fall back to `NAO_USERNAME` / `NAO_PASSWORD`. When omitted, the CLI uses your stored login or opens the browser login flow.
 
@@ -266,9 +279,10 @@ Examples:
 nao test -m openai:gpt-4.1
 nao test -m openai:gpt-4.1 -m anthropic:claude-sonnet-4-20250514
 nao test --threads 4
+nao test --k 5
 ```
 
-Defaults for every run live in the `test` block of `nao_config.yaml`, and the `--model` / `--threads` flags override them:
+Defaults for every run live in the `test` block of `nao_config.yaml`, and the `--model` / `--threads` / `--k` flags override them:
 
 ```yaml
 test:
@@ -276,6 +290,7 @@ test:
         - openai:gpt-4.1
         - anthropic:claude-sonnet-4-5
     threads: 4
+    # k: 5  # run each case 5 times to compute pass@k / pass^k
     comparison:
         rtol: 0.00001
         atol: 0.00000001

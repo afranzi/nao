@@ -37,7 +37,12 @@ const ANALYSIS_STEP_BUDGET = 40;
 
 export async function runContextRecommendations(
 	projectId: string,
-	options?: { trigger?: 'schedule' | 'manual'; period?: { start?: Date; end?: Date } },
+	options?: {
+		billingAccessVerifiedProjectId?: string;
+		trigger?: 'schedule' | 'manual';
+		triggeredByUserId?: string;
+		period?: { start?: Date; end?: Date };
+	},
 ): Promise<{ runId: string }> {
 	const period = options?.period;
 	const now = new Date();
@@ -76,7 +81,7 @@ export async function runContextRecommendations(
 			await crQueries.getContextFileReadCosts(projectId, periodStart, periodEnd),
 		);
 
-		const userId = await crQueries.getFirstProjectAdminUserId(projectId);
+		const userId = options?.triggeredByUserId ?? (await crQueries.getFirstProjectAdminUserId(projectId));
 		const [chat] = await chatQueries.createChat(
 			{ title: 'Context recommendations run', userId, projectId },
 			{
@@ -103,6 +108,7 @@ export async function runContextRecommendations(
 
 		const collector = createRecommendationCollector();
 		const agent = await agentService.create({ ...uiChat, id: chat.id, projectId, userId }, model, {
+			billingAccessVerifiedProjectId: options?.billingAccessVerifiedProjectId,
 			excludeFollowUps: true,
 			maxSteps: ANALYSIS_STEP_BUDGET,
 			systemPrompt: renderContextRecommendationsSystemPrompt({

@@ -86,6 +86,8 @@ function createContext(): ToolContext {
 		warehouseTableAccess: { enforced: false },
 		warehouseRowSecurity: { enforced: false },
 		docsContextAccess: { enforced: false } as ToolContext['docsContextAccess'],
+		filesContextAccess: { enforced: false } as ToolContext['filesContextAccess'],
+		mcpAccess: { mode: 'all' } as ToolContext['mcpAccess'],
 		userGroupFeatures: [],
 		userRulesGroupAccess: { enforced: false } as ToolContext['userRulesGroupAccess'],
 		azureAccessToken: null,

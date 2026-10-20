@@ -1,18 +1,21 @@
 import {
 	ALL_DATABASE_CONTEXT_ACCESS,
 	ALL_DOCS_CONTEXT_ACCESS,
-	type BackgroundModelSettings,
+	ALL_FILES_CONTEXT_ACCESS,
+	ALL_MCP_ACCESS,
 	type CustomBoundarySet,
 	DEFAULT_TOOL_CALL_DENSITY_POLICY,
 	DEFAULT_USER_GROUP_NAME,
+	type DefaultModelSettings,
 	type MapSettings,
 	serializeUserGroupConfig,
 	serializeUserGroupContextAccess,
+	SYSTEM_EXAMPLE_PROJECT_ID,
 	USER_GROUP_FEATURES,
 } from '@nao/shared';
 import { DEFAULT_DATE_FORMAT_SETTINGS, type DisplaySettings } from '@nao/shared/date';
 import type { UpdatedAtFilter, UserRole } from '@nao/shared/types';
-import { and, asc, desc, eq, gt, gte, isNotNull, lte, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNotNull, lte, ne, or, type SQL, sql } from 'drizzle-orm';
 
 import type { AgentSettings, DBProject, DBProjectMember, NewProject, NewProjectMember } from '../db/abstractSchema';
 import s from '../db/abstractSchema';
@@ -71,10 +74,18 @@ export const setProjectMemoryEnabled = async (projectId: string, memoryEnabled: 
 	await updateAgentSettings(projectId, { memoryEnabled });
 };
 
-export const createProject = async (project: NewProject, transaction?: DBTransaction): Promise<DBProject> =>
-	transaction
+export const createProject = async (project: NewProject, transaction?: DBTransaction): Promise<DBProject> => {
+	if (isCloud && !project.orgId) {
+		throw new Error('Cloud projects must belong to an organization.');
+	}
+	return transaction
 		? createProjectWithDefaultGroup(project, transaction)
 		: db.transaction((tx) => createProjectWithDefaultGroup(project, tx));
+};
+
+export const deleteProject = async (projectId: string): Promise<void> => {
+	await db.delete(s.project).where(eq(s.project.id, projectId)).execute();
+};
 
 export const getProjectMember = async (projectId: string, userId: string): Promise<DBProjectMember | null> => {
 	const [member] = await db
@@ -132,7 +143,12 @@ export const listUserProjectsWithRoles = async (userId: string): Promise<UserPro
 		.from(s.project)
 		.leftJoin(s.projectMember, and(eq(s.projectMember.projectId, s.project.id), eq(s.projectMember.userId, userId)))
 		.leftJoin(s.orgMember, and(eq(s.orgMember.orgId, s.project.orgId), eq(s.orgMember.userId, userId)))
-		.where(or(eq(s.projectMember.userId, userId), eq(s.orgMember.userId, userId)))
+		.where(
+			and(
+				ne(s.project.id, SYSTEM_EXAMPLE_PROJECT_ID),
+				or(eq(s.projectMember.userId, userId), eq(s.orgMember.userId, userId)),
+			),
+		)
 		.orderBy(asc(s.project.name))
 		.execute();
 	return results;
@@ -360,15 +376,15 @@ export const updateDisplaySettings = async (projectId: string, settings: Display
 	return next;
 };
 
-export const getDefaultModelSettings = async (projectId: string): Promise<BackgroundModelSettings | null> => {
+export const getDefaultModelSettings = async (projectId: string): Promise<DefaultModelSettings | null> => {
 	const project = await getProjectById(projectId);
 	return project?.defaultModels ?? null;
 };
 
 export const updateDefaultModelSettings = async (
 	projectId: string,
-	settings: BackgroundModelSettings,
-): Promise<BackgroundModelSettings> => {
+	settings: DefaultModelSettings,
+): Promise<DefaultModelSettings> => {
 	await db.update(s.project).set({ defaultModels: settings }).where(eq(s.project.id, projectId)).execute();
 	return settings;
 };
@@ -457,7 +473,12 @@ const defaultUserGroupValues = (projectId: string) => ({
 	name: DEFAULT_USER_GROUP_NAME,
 	isDefault: true,
 	featureGrants: serializeUserGroupConfig(USER_GROUP_FEATURES, DEFAULT_TOOL_CALL_DENSITY_POLICY),
-	contextGrants: serializeUserGroupContextAccess(ALL_DATABASE_CONTEXT_ACCESS, ALL_DOCS_CONTEXT_ACCESS),
+	contextGrants: serializeUserGroupContextAccess({
+		databaseAccess: ALL_DATABASE_CONTEXT_ACCESS,
+		docsAccess: ALL_DOCS_CONTEXT_ACCESS,
+		filesAccess: ALL_FILES_CONTEXT_ACCESS,
+		mcpAccess: ALL_MCP_ACCESS,
+	}),
 });
 
 export const getEnvVars = async (projectId: string): Promise<Record<string, string>> => {
@@ -618,6 +639,14 @@ export const listProjectChats = async (
 				or CAST(${upvotesExpr} AS TEXT) like ${like}
 				or CAST(${toolErrorCountExpr} AS TEXT) like ${like}
 				or CAST(${toolAvailableCountExpr} AS TEXT) like ${like}
+				or exists (
+					select 1
+					from ${s.chatMessage}
+					inner join ${s.messagePart} on ${s.messagePart.messageId} = ${s.chatMessage.id}
+					where ${s.chatMessage.chatId} = ${s.chat.id}
+						and ${s.chatMessage.supersededAt} is null
+						and lower(${s.messagePart.text}) like ${like}
+				)
 			)
 		`);
 	}
@@ -924,4 +953,49 @@ async function loadProjectChatsFacets(args: {
 			toolsWithErrors: Number(toolStateRow?.toolsWithErrors ?? 0),
 		},
 	};
+}
+
+export async function upsertSystemExampleProject(projectPath: string): Promise<DBProject> {
+	const project = {
+		id: SYSTEM_EXAMPLE_PROJECT_ID,
+		orgId: null,
+		name: 'Jaffle Shop',
+		type: 'local' as const,
+		path: projectPath,
+	};
+	return dbConfig.dialect === Dialect.Postgres
+		? db.transaction((transaction) => upsertPostgresSystemExampleProject(project, transaction))
+		: db.transaction((transaction) => {
+				const [stored] = transaction
+					.insert(s.project)
+					.values(project)
+					.onConflictDoUpdate({
+						target: s.project.id,
+						set: {
+							name: project.name,
+							path: project.path,
+						},
+					})
+					.returning()
+					.all();
+				transaction.insert(s.userGroup).values(defaultUserGroupValues(stored.id)).onConflictDoNothing().run();
+				return stored;
+			});
+}
+
+async function upsertPostgresSystemExampleProject(project: NewProject, transaction: DBTransaction): Promise<DBProject> {
+	const [stored] = await transaction
+		.insert(s.project)
+		.values(project)
+		.onConflictDoUpdate({
+			target: s.project.id,
+			set: {
+				name: project.name,
+				path: project.path,
+			},
+		})
+		.returning()
+		.execute();
+	await transaction.insert(s.userGroup).values(defaultUserGroupValues(stored.id)).onConflictDoNothing().execute();
+	return stored;
 }

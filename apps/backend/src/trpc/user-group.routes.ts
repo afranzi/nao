@@ -3,14 +3,19 @@ import {
 	DEFAULT_TOOL_CALL_DENSITY_POLICY,
 	EMPTY_DATABASE_CONTEXT_ACCESS,
 	EMPTY_DOCS_CONTEXT_ACCESS,
+	EMPTY_FILES_CONTEXT_ACCESS,
+	EMPTY_MCP_ACCESS,
 	FREE_CUSTOM_USER_GROUP_LIMIT,
 	isMicrosoftEntraGroupId,
+	type McpAccess,
 	normalizeDatabaseContextAccess,
-	normalizeDocsContextAccess,
-	normalizeDocsContextPath,
+	normalizeFileTreeAccess,
+	normalizeFileTreePath,
+	normalizeMcpAccess,
 	normalizeProjectRowSecurity,
 	normalizeUserGroupRowPolicies,
 	normalizeUserGroupSsoMappings,
+	PROJECT_SHARING_PERMISSIONS,
 	type ProjectRowSecurity,
 	ROW_SECURITY_COMBINATORS,
 	ROW_SECURITY_MAX_CONDITIONS,
@@ -30,8 +35,14 @@ import { getDatabaseContextCatalog } from '../agents/user-rules';
 import { env } from '../env';
 import * as projectQueries from '../queries/project.queries';
 import * as userGroupQueries from '../queries/user-group.queries';
-import { getDocsContextCatalog } from '../services/docs-context-catalog.service';
+import { getDocsContextCatalog, getFilesContextCatalog } from '../services/file-tree-catalog.service';
 import { hasFeature, LICENSE_FEATURES } from '../services/license.service';
+import { setGroupBudget } from '../services/member-budget.service';
+import {
+	getShareAudience,
+	previewProjectWideShareRevocation,
+	revokeUnauthorizedProjectWideShares,
+} from '../services/project-sharing.service';
 import {
 	listEffectiveEntraUserGroupMappings,
 	listEffectiveOidcUserGroupMappings,
@@ -42,6 +53,8 @@ import {
 	getEffectiveUserGroupAccessForUserDetail,
 } from '../services/user-group-feature-access.service';
 import { validateWarehouseRowPredicate } from '../services/warehouse-sql.service';
+import { budgetLimitUsdSchema } from '../types/member-budget';
+import { assertMemberBudgetLicensed } from '../utils/member-budget';
 import { parseEntraGroupNaoGroupMapping, parseOidcGroupNaoGroupMapping } from '../utils/sso-group-mapping';
 import { adminProtectedProcedure, projectProtectedProcedure } from './trpc';
 
@@ -51,6 +64,7 @@ const toolCallDensityPolicySchema = z.object({
 	defaultDensity: z.enum(TOOL_CALL_DENSITIES),
 	canChange: z.boolean(),
 });
+const projectSharingSchema = z.enum(PROJECT_SHARING_PERMISSIONS);
 const contextNameSchema = z.string().trim().min(1).max(255);
 const databaseContextGrantSchema = z.discriminatedUnion('kind', [
 	z
@@ -82,18 +96,26 @@ const databaseAccessSchema = z.discriminatedUnion('mode', [
 		})
 		.strict(),
 ]);
-const docsPathSchema = z
+const fileTreePathSchema = z
 	.string()
 	.max(1_024)
-	.refine((value) => normalizeDocsContextPath(value) !== null, 'Invalid docs path.')
-	.transform((value) => normalizeDocsContextPath(value)!);
-const docsContextGrantSchema = z.discriminatedUnion('kind', [
-	z.object({ kind: z.literal('folder'), path: docsPathSchema }).strict(),
-	z.object({ kind: z.literal('file'), path: docsPathSchema }).strict(),
+	.refine((value) => normalizeFileTreePath(value) !== null, 'Invalid path.')
+	.transform((value) => normalizeFileTreePath(value)!);
+const fileTreeGrantSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('folder'), path: fileTreePathSchema }).strict(),
+	z.object({ kind: z.literal('file'), path: fileTreePathSchema }).strict(),
 ]);
-const docsAccessSchema = z.discriminatedUnion('mode', [
+const fileTreeAccessSchema = z.discriminatedUnion('mode', [
 	z.object({ mode: z.literal('all') }).strict(),
-	z.object({ mode: z.literal('restricted'), grants: z.array(docsContextGrantSchema).max(10_000) }).strict(),
+	z.object({ mode: z.literal('restricted'), grants: z.array(fileTreeGrantSchema).max(10_000) }).strict(),
+]);
+const mcpGrantSchema = z.discriminatedUnion('kind', [
+	z.object({ kind: z.literal('server'), server: contextNameSchema }).strict(),
+	z.object({ kind: z.literal('tool'), server: contextNameSchema, tool: contextNameSchema }).strict(),
+]);
+const mcpAccessSchema = z.discriminatedUnion('mode', [
+	z.object({ mode: z.literal('all') }).strict(),
+	z.object({ mode: z.literal('restricted'), grants: z.array(mcpGrantSchema).max(10_000) }).strict(),
 ]);
 const ssoIdentifierSchema = z.string().trim().min(1).max(255);
 const ssoMappingsSchema = z
@@ -204,6 +226,17 @@ export const userGroupRoutes = {
 		return getEffectiveUserGroupAccess(ctx.project.id, ctx.user.id);
 	}),
 
+	projectSharingAccess: projectProtectedProcedure.query(async ({ ctx }) => {
+		const audience = await getShareAudience(ctx.project.id, ctx.user.id);
+		return { canShareToProject: audience.canShareToProject };
+	}),
+
+	previewProjectSharingRevocation: adminProtectedProcedure
+		.input(z.object({ groupId: z.string().min(1), projectSharing: projectSharingSchema }))
+		.query(async ({ ctx, input }) => {
+			return previewProjectWideShareRevocation(ctx.project.id, input.groupId, input.projectSharing);
+		}),
+
 	effectiveAccessForUser: adminProtectedProcedure
 		.input(z.object({ userId: z.string().min(1) }))
 		.query(async ({ ctx, input }) => {
@@ -267,21 +300,33 @@ export const userGroupRoutes = {
 		return getDocsContextCatalog(requireProjectPath(ctx.project.path));
 	}),
 
+	filesContextCatalog: adminProtectedProcedure.query(async ({ ctx }) => {
+		return getFilesContextCatalog(requireProjectPath(ctx.project.path));
+	}),
+
 	create: adminProtectedProcedure
 		.input(
 			z.object({
 				name: groupNameSchema,
 				featureGrants: featureGrantsSchema.default([]),
 				toolCallDensityPolicy: toolCallDensityPolicySchema.default(DEFAULT_TOOL_CALL_DENSITY_POLICY),
+				projectSharing: projectSharingSchema.default('inherit'),
 				databaseAccess: databaseAccessSchema.default(EMPTY_DATABASE_CONTEXT_ACCESS),
-				docsAccess: docsAccessSchema.default(EMPTY_DOCS_CONTEXT_ACCESS),
+				docsAccess: fileTreeAccessSchema.default(EMPTY_DOCS_CONTEXT_ACCESS),
+				filesAccess: fileTreeAccessSchema.default(EMPTY_FILES_CONTEXT_ACCESS),
+				mcpAccess: mcpAccessSchema.default(EMPTY_MCP_ACCESS),
 				ssoMappings: ssoMappingsSchema.optional(),
 				rowPolicies: userGroupRowPoliciesSchema.optional(),
+				budgetLimitUsd: budgetLimitUsdSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
+			await assertGroupBudgetEditable(input.budgetLimitUsd);
 			const databaseAccess = normalizeDatabaseContextAccess(input.databaseAccess);
-			const docsAccess = normalizeDocsContextAccess(input.docsAccess);
+			const docsAccess = normalizeFileTreeAccess(input.docsAccess);
+			const filesAccess = normalizeFileTreeAccess(input.filesAccess);
+			const mcpAccess = normalizeMcpAccess(input.mcpAccess);
+			await assertMcpAccessChangeAllowed(mcpAccess, () => EMPTY_MCP_ACCESS);
 			let rowPolicies: UserGroupRowPolicies | undefined;
 			if (input.rowPolicies !== undefined) {
 				await assertRowSecurityLicensed();
@@ -294,7 +339,7 @@ export const userGroupRoutes = {
 			const createUserGroup = (await hasFeature(LICENSE_FEATURES.userGroups))
 				? userGroupQueries.createUserGroup
 				: userGroupQueries.createUserGroupWithinLimit.bind(null, FREE_CUSTOM_USER_GROUP_LIMIT);
-			return handleQuery(() => {
+			const group = await handleQuery(() => {
 				const values = [
 					ctx.project.id,
 					input.name,
@@ -302,18 +347,16 @@ export const userGroupRoutes = {
 					input.toolCallDensityPolicy,
 					databaseAccess,
 					docsAccess,
+					input.ssoMappings === undefined ? undefined : normalizeUserGroupSsoMappings(input.ssoMappings),
+					rowPolicies,
+					filesAccess,
+					input.projectSharing,
+					mcpAccess,
 				] as const;
-				if (rowPolicies !== undefined) {
-					return createUserGroup(
-						...values,
-						input.ssoMappings === undefined ? undefined : normalizeUserGroupSsoMappings(input.ssoMappings),
-						rowPolicies,
-					);
-				}
-				return input.ssoMappings === undefined
-					? createUserGroup(...values)
-					: createUserGroup(...values, normalizeUserGroupSsoMappings(input.ssoMappings));
+				return createUserGroup(...values);
 			});
+			await saveGroupBudget(ctx.project.id, group.id, input.budgetLimitUsd);
+			return group;
 		}),
 
 	update: adminProtectedProcedure
@@ -323,18 +366,30 @@ export const userGroupRoutes = {
 				name: groupNameSchema.optional(),
 				featureGrants: featureGrantsSchema,
 				toolCallDensityPolicy: toolCallDensityPolicySchema,
+				projectSharing: projectSharingSchema.optional(),
 				databaseAccess: databaseAccessSchema.optional(),
-				docsAccess: docsAccessSchema.optional(),
+				docsAccess: fileTreeAccessSchema.optional(),
+				filesAccess: fileTreeAccessSchema.optional(),
+				mcpAccess: mcpAccessSchema.optional(),
 				ssoMappings: ssoMappingsSchema.optional(),
 				rowPolicies: userGroupRowPoliciesSchema.optional(),
+				budgetLimitUsd: budgetLimitUsdSchema.optional(),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
 			await handleQuery(() => assertUserGroupManageable(ctx.project.id, input.groupId));
+			await assertGroupBudgetEditable(input.budgetLimitUsd);
 			const databaseAccess =
 				input.databaseAccess === undefined ? undefined : normalizeDatabaseContextAccess(input.databaseAccess);
-			const docsAccess =
-				input.docsAccess === undefined ? undefined : normalizeDocsContextAccess(input.docsAccess);
+			const docsAccess = input.docsAccess === undefined ? undefined : normalizeFileTreeAccess(input.docsAccess);
+			const filesAccess =
+				input.filesAccess === undefined ? undefined : normalizeFileTreeAccess(input.filesAccess);
+			const mcpAccess = input.mcpAccess === undefined ? undefined : normalizeMcpAccess(input.mcpAccess);
+			if (mcpAccess !== undefined) {
+				await assertMcpAccessChangeAllowed(mcpAccess, () =>
+					getCurrentGroupMcpAccess(ctx.project.id, input.groupId),
+				);
+			}
 			let rowPolicies: UserGroupRowPolicies | undefined;
 			let rowPoliciesRegistry: ProjectRowSecurity | undefined;
 			if (input.rowPolicies !== undefined) {
@@ -346,24 +401,31 @@ export const userGroupRoutes = {
 				rowPolicies = validation.rowPolicies;
 				rowPoliciesRegistry = validation.registry;
 			}
-			return handleQuery(() =>
+			const group = await handleQuery(() =>
 				userGroupQueries.updateUserGroup(ctx.project.id, input.groupId, {
 					name: input.name,
 					featureGrants: unique(input.featureGrants),
 					toolCallDensityPolicy: input.toolCallDensityPolicy,
+					projectSharing: input.projectSharing,
 					...(databaseAccess === undefined ? {} : { databaseAccess }),
 					...(docsAccess === undefined ? {} : { docsAccess }),
+					...(filesAccess === undefined ? {} : { filesAccess }),
+					...(mcpAccess === undefined ? {} : { mcpAccess }),
 					...(input.ssoMappings === undefined
 						? {}
 						: { ssoMappings: normalizeUserGroupSsoMappings(input.ssoMappings) }),
 					...(rowPolicies === undefined ? {} : { rowPolicies, rowPoliciesRegistry }),
 				}),
 			);
+			await saveGroupBudget(ctx.project.id, input.groupId, input.budgetLimitUsd);
+			await revokeUnauthorizedProjectWideShares(ctx.project.id);
+			return group;
 		}),
 
 	delete: adminProtectedProcedure.input(z.object({ groupId: z.string().min(1) })).mutation(async ({ ctx, input }) => {
 		await handleQuery(() => assertUserGroupManageable(ctx.project.id, input.groupId));
-		return handleQuery(() => userGroupQueries.deleteUserGroup(ctx.project.id, input.groupId));
+		await handleQuery(() => userGroupQueries.deleteUserGroup(ctx.project.id, input.groupId));
+		await revokeUnauthorizedProjectWideShares(ctx.project.id);
 	}),
 
 	setMembership: adminProtectedProcedure
@@ -376,16 +438,58 @@ export const userGroupRoutes = {
 		)
 		.mutation(async ({ ctx, input }) => {
 			await handleQuery(() => assertUserGroupManageable(ctx.project.id, input.groupId));
-			return handleQuery(() =>
+			await handleQuery(() =>
 				userGroupQueries.setUserGroupMembership(ctx.project.id, input.groupId, input.userId, input.isMember),
 			);
+			await revokeUnauthorizedProjectWideShares(ctx.project.id);
 		}),
 };
+
+async function assertGroupBudgetEditable(budgetLimitUsd: number | null | undefined): Promise<void> {
+	if (budgetLimitUsd !== undefined) {
+		await assertMemberBudgetLicensed();
+	}
+}
+
+async function saveGroupBudget(
+	projectId: string,
+	groupId: string,
+	budgetLimitUsd: number | null | undefined,
+): Promise<void> {
+	if (budgetLimitUsd !== undefined) {
+		await setGroupBudget(projectId, groupId, budgetLimitUsd);
+	}
+}
 
 async function assertRowSecurityLicensed(): Promise<void> {
 	if (!(await hasFeature(LICENSE_FEATURES.rowLevelSecurity))) {
 		throw new TRPCError({ code: 'FORBIDDEN', message: 'Row-level security requires an Enterprise license.' });
 	}
+}
+
+/** Without the license an admin may still lift MCP restrictions, so a lapsed license never locks a group in. */
+async function assertMcpAccessChangeAllowed(
+	mcpAccess: McpAccess,
+	getCurrentMcpAccess: () => McpAccess | Promise<McpAccess>,
+): Promise<void> {
+	if (mcpAccess.mode === 'all') {
+		return;
+	}
+	const currentMcpAccess = normalizeMcpAccess(await getCurrentMcpAccess());
+	if (JSON.stringify(currentMcpAccess) === JSON.stringify(mcpAccess)) {
+		return;
+	}
+	if (!(await hasFeature(LICENSE_FEATURES.rowLevelSecurity))) {
+		throw new TRPCError({
+			code: 'FORBIDDEN',
+			message: 'Restricting MCP servers per group requires an Enterprise license.',
+		});
+	}
+}
+
+async function getCurrentGroupMcpAccess(projectId: string, groupId: string): Promise<McpAccess> {
+	const groups = await userGroupQueries.listUserGroups(projectId);
+	return groups.find((group) => group.id === groupId)?.mcpAccess ?? EMPTY_MCP_ACCESS;
 }
 
 async function assertRowSecurityChangeAllowed(projectId: string, rowSecurity: ProjectRowSecurity): Promise<void> {

@@ -1,11 +1,12 @@
 import { extractQueryIds } from '@nao/shared/story-segments';
 import { type StorySharingInfo } from '@nao/shared/types';
-import { and, asc, desc, eq, inArray, isNull, max, or, type SQL, sql } from 'drizzle-orm';
+import { aliasedTable, and, asc, countDistinct, desc, eq, inArray, isNull, max, or, type SQL, sql } from 'drizzle-orm';
 
 import s, { type DBStory, type DBStoryDataCache, type DBStoryVersion } from '../db/abstractSchema';
 import { db, type DBExecutor } from '../db/db';
 import type { StoryQuerySources } from '../types/story-cache';
 import * as executeSqlQueries from './execute-sql.queries';
+import { sharedStoryGrantsUser } from './shared-story.queries';
 
 export type UserStoryRow = Pick<
 	DBStory,
@@ -20,9 +21,18 @@ export type UserStoryRow = Pick<
 	| 'cacheSchedule'
 	| 'cacheScheduleDescription'
 	| 'archivedAt'
+	| 'certifiedAt'
+	| 'format'
 	| 'createdAt'
 	| 'updatedAt'
-> & { code: string; version: number };
+> & {
+	code: string;
+	version: number;
+	versionCreatedAt: DBStoryVersion['createdAt'];
+	certifiedByName: string | null;
+};
+
+const storyCertifier = aliasedTable(s.user, 'story_certifier');
 
 export async function getStoryByChatAndSlug(
 	chatId: string,
@@ -37,6 +47,27 @@ export async function getStoryByChatAndSlug(
 		.execute();
 
 	return row ?? null;
+}
+
+export function listCustomStoriesInChat(chatId: string, executor: DBExecutor = db): Promise<DBStory[]> {
+	return executor
+		.select()
+		.from(s.story)
+		.where(and(eq(s.story.chatId, chatId), eq(s.story.format, 'custom')))
+		.orderBy(asc(s.story.slug))
+		.execute();
+}
+
+export async function createCustomStory(
+	data: { chatId: string; slug: string; title: string },
+	executor: DBExecutor = db,
+): Promise<DBStory> {
+	const [row] = await executor
+		.insert(s.story)
+		.values({ ...data, format: 'custom' })
+		.returning()
+		.execute();
+	return row;
 }
 
 export async function getStoryById(storyId: string): Promise<DBStory | null> {
@@ -96,13 +127,18 @@ export async function getStoryByIdForUser(storyId: string, userId: string): Prom
 			cacheSchedule: s.story.cacheSchedule,
 			cacheScheduleDescription: s.story.cacheScheduleDescription,
 			archivedAt: s.story.archivedAt,
+			certifiedAt: s.story.certifiedAt,
+			certifiedByName: storyCertifier.name,
+			format: s.story.format,
 			createdAt: s.story.createdAt,
 			updatedAt: s.story.updatedAt,
 			code: s.storyVersion.code,
 			version: s.storyVersion.version,
+			versionCreatedAt: s.storyVersion.createdAt,
 		})
 		.from(s.story)
 		.leftJoin(s.chat, eq(s.story.chatId, s.chat.id))
+		.leftJoin(storyCertifier, eq(s.story.certifiedBy, storyCertifier.id))
 		.innerJoin(latestVersions, eq(s.story.id, latestVersions.storyId))
 		.innerJoin(
 			s.storyVersion,
@@ -200,6 +236,48 @@ export async function listStoriesInChat(
 		title: row.title,
 		latestVersion: row.latestVersion ?? 1,
 	}));
+}
+
+export type ChatStoryLatestVersion = Pick<DBStory, 'slug' | 'title' | 'format' | 'archivedAt'> & {
+	storyId: string;
+	version: number | null;
+	code: string | null;
+	source: DBStoryVersion['source'] | null;
+};
+
+/** Every story of a chat, archived included, with its latest version; a never-published custom draft has none. */
+export async function listLatestVersionsInChat(chatId: string): Promise<ChatStoryLatestVersion[]> {
+	const latest = db
+		.select({
+			storyId: s.storyVersion.storyId,
+			maxVersion: max(s.storyVersion.version).as('max_version'),
+		})
+		.from(s.storyVersion)
+		.innerJoin(s.story, eq(s.storyVersion.storyId, s.story.id))
+		.where(eq(s.story.chatId, chatId))
+		.groupBy(s.storyVersion.storyId)
+		.as('latest');
+
+	return db
+		.select({
+			storyId: s.story.id,
+			slug: s.story.slug,
+			title: s.story.title,
+			format: s.story.format,
+			archivedAt: s.story.archivedAt,
+			version: s.storyVersion.version,
+			code: s.storyVersion.code,
+			source: s.storyVersion.source,
+		})
+		.from(s.story)
+		.leftJoin(latest, eq(latest.storyId, s.story.id))
+		.leftJoin(
+			s.storyVersion,
+			and(eq(s.storyVersion.storyId, s.story.id), eq(s.storyVersion.version, latest.maxVersion)),
+		)
+		.where(eq(s.story.chatId, chatId))
+		.orderBy(asc(s.story.createdAt))
+		.execute();
 }
 
 export async function createStoryVersion(
@@ -350,6 +428,25 @@ export async function unarchiveByStoryId(storyId: string): Promise<void> {
 	await db.update(s.story).set({ archivedAt: null }).where(eq(s.story.id, storyId)).execute();
 }
 
+export async function setStoryCertification(storyId: string, certifiedBy: string | null): Promise<Date | null> {
+	const certifiedAt = certifiedBy ? new Date() : null;
+	await db.update(s.story).set({ certifiedAt, certifiedBy }).where(eq(s.story.id, storyId)).execute();
+	return certifiedAt;
+}
+
+export async function getStoryCertification(
+	storyId: string,
+): Promise<{ certifiedAt: Date | null; certifiedByName: string | null }> {
+	const [row] = await db
+		.select({ certifiedAt: s.story.certifiedAt, certifiedByName: storyCertifier.name })
+		.from(s.story)
+		.leftJoin(storyCertifier, eq(s.story.certifiedBy, storyCertifier.id))
+		.where(eq(s.story.id, storyId))
+		.limit(1)
+		.execute();
+	return row ?? { certifiedAt: null, certifiedByName: null };
+}
+
 async function detachStoriesFromFolders(storyIds: string[]): Promise<void> {
 	if (storyIds.length === 0) {
 		return;
@@ -390,17 +487,13 @@ export async function canUserAccessStory(storyId: string, userId: string): Promi
 		.select({ id: s.sharedStory.id })
 		.from(s.sharedStory)
 		.innerJoin(s.project, eq(s.project.id, s.sharedStory.projectId))
-		.leftJoin(
-			s.sharedStoryAccess,
-			and(eq(s.sharedStoryAccess.sharedStoryId, s.sharedStory.id), eq(s.sharedStoryAccess.userId, userId)),
-		)
 		.where(
 			and(
 				eq(s.sharedStory.storyId, storyId),
 				or(
 					eq(s.sharedStory.userId, userId),
 					and(eq(s.sharedStory.visibility, 'project'), or(isProjectMember, isOrgMember)),
-					and(eq(s.sharedStory.visibility, 'specific'), sql`${s.sharedStoryAccess.userId} IS NOT NULL`),
+					and(eq(s.sharedStory.visibility, 'specific'), sharedStoryGrantsUser(userId)),
 				),
 			),
 		)
@@ -438,14 +531,7 @@ type StoryVersionWithStory = DBStoryVersion &
 		| 'cacheSchedule'
 		| 'cacheScheduleDescription'
 		| 'archivedAt'
-		| 'title'
-		| 'slug'
-		| 'chatId'
-		| 'isLive'
-		| 'isLiveTextDynamic'
-		| 'cacheSchedule'
-		| 'cacheScheduleDescription'
-		| 'archivedAt'
+		| 'format'
 	>;
 
 export function getLatestVersionByChatAndSlug(chatId: string, slug: string): Promise<StoryVersionWithStory | null> {
@@ -505,6 +591,29 @@ export function getStoryDataCacheByStoryId(storyId: string): Promise<DBStoryData
 	return getStoryDataCache(eq(s.story.id, storyId));
 }
 
+export async function getStoryDataCachedAt(storyId: string): Promise<Date | null> {
+	const [row] = await db
+		.select({ cachedAt: s.storyDataCache.cachedAt })
+		.from(s.storyDataCache)
+		.where(eq(s.storyDataCache.storyId, storyId))
+		.execute();
+	return row?.cachedAt ?? null;
+}
+
+export async function getStoryQueryDataByStoryIds(
+	storyIds: string[],
+): Promise<Map<string, DBStoryDataCache['queryData']>> {
+	if (storyIds.length === 0) {
+		return new Map();
+	}
+	const rows = await db
+		.select({ storyId: s.storyDataCache.storyId, queryData: s.storyDataCache.queryData })
+		.from(s.storyDataCache)
+		.where(inArray(s.storyDataCache.storyId, storyIds))
+		.execute();
+	return new Map(rows.map((row) => [row.storyId, row.queryData]));
+}
+
 export async function upsertStoryDataCache(
 	chatId: string,
 	slug: string,
@@ -558,7 +667,7 @@ export async function upsertStoryDataCacheByStoryId(
 export async function getSqlQueriesFromCode(
 	chatId: string,
 	code: string,
-): Promise<Record<string, { sqlQuery: string; databaseId?: string; adminMode: boolean }>> {
+): Promise<Record<string, executeSqlQueries.StoredSqlQuery>> {
 	const queryIds = extractQueryIds(code);
 	if (queryIds.size === 0) {
 		return {};
@@ -608,13 +717,18 @@ async function queryStoriesWithLatestVersion(
 			cacheSchedule: s.story.cacheSchedule,
 			cacheScheduleDescription: s.story.cacheScheduleDescription,
 			archivedAt: s.story.archivedAt,
+			certifiedAt: s.story.certifiedAt,
+			certifiedByName: storyCertifier.name,
+			format: s.story.format,
 			createdAt: s.story.createdAt,
 			updatedAt: s.story.updatedAt,
 			code: s.storyVersion.code,
 			version: s.storyVersion.version,
+			versionCreatedAt: s.storyVersion.createdAt,
 		})
 		.from(s.story)
 		.leftJoin(s.chat, eq(s.story.chatId, s.chat.id))
+		.leftJoin(storyCertifier, eq(s.story.certifiedBy, storyCertifier.id))
 		.innerJoin(latestVersions, eq(s.story.id, latestVersions.storyId))
 		.innerJoin(
 			s.storyVersion,
@@ -696,6 +810,7 @@ async function getStoryVersion(
 			cacheSchedule: s.story.cacheSchedule,
 			cacheScheduleDescription: s.story.cacheScheduleDescription,
 			archivedAt: s.story.archivedAt,
+			format: s.story.format,
 		})
 		.from(s.storyVersion)
 		.innerJoin(s.story, eq(s.storyVersion.storyId, s.story.id))
@@ -734,10 +849,12 @@ export async function getStorySharingInfo(storyIds: string[]): Promise<Map<strin
 			storyId: s.sharedStory.storyId,
 			visibility: s.sharedStory.visibility,
 			isPinned: s.sharedStory.isPinned,
-			sharedWithCount: sql<number>`count(${s.sharedStoryAccess.userId})`.mapWith(Number),
+			sharedWithCount: countDistinct(s.sharedStoryAccess.userId),
+			sharedWithGroupCount: countDistinct(s.sharedStoryGroupAccess.groupId),
 		})
 		.from(s.sharedStory)
 		.leftJoin(s.sharedStoryAccess, eq(s.sharedStoryAccess.sharedStoryId, s.sharedStory.id))
+		.leftJoin(s.sharedStoryGroupAccess, eq(s.sharedStoryGroupAccess.sharedStoryId, s.sharedStory.id))
 		.where(inArray(s.sharedStory.storyId, storyIds))
 		.groupBy(s.sharedStory.id)
 		.execute();
@@ -747,6 +864,7 @@ export async function getStorySharingInfo(storyIds: string[]): Promise<Map<strin
 		result.set(row.storyId, {
 			visibility: row.visibility,
 			sharedWithCount: row.sharedWithCount,
+			sharedWithGroupCount: row.sharedWithGroupCount,
 			isPinned: row.isPinned,
 		});
 	}

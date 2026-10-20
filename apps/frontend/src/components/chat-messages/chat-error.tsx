@@ -1,8 +1,13 @@
-import { AlertCircleIcon, CheckIcon, CopyIcon, RotateCcwIcon } from 'lucide-react';
+import { AlertCircleIcon, CheckIcon, CopyIcon, CreditCardIcon, RotateCcwIcon } from 'lucide-react';
 import { Button } from '../ui/button';
-import { useAgentContext, useAgentMessages } from '@/contexts/agent.provider';
+import { Callout } from '../ui/callout';
+import type { UIMessage } from '@nao/backend/chat';
+import { useAgentContext, useAgentMessagesSelector } from '@/contexts/agent.provider';
+import { useCloudBillingAccess } from '@/hooks/use-cloud-billing-access';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
-import { parseBudgetError } from '@/lib/ai';
+import { useOpenOrganizationBilling } from '@/hooks/use-open-organization-billing';
+import { getLastUserMessageIdx, parseBudgetError } from '@/lib/ai';
+import { isCloudBillingAccessError } from '@/lib/cloud-billing-access';
 import { cn } from '@/lib/utils';
 
 export interface Props {
@@ -41,32 +46,51 @@ function asString(value: unknown): string | undefined {
 
 export function ChatError({ className }: Props) {
 	const { error, isRunning, resendMessage, clearError } = useAgentContext();
-	const messages = useAgentMessages();
+	const lastUserMessageId = useAgentMessagesSelector(findLastUserMessageId);
 	const { isCopied, copy } = useCopyToClipboard();
+	const openOrganizationBilling = useOpenOrganizationBilling();
+	const parsed = error ? parseError(error) : null;
+	const isBillingAccessError = isCloudBillingAccessError(parsed);
+	const billingAccess = useCloudBillingAccess({ enabled: isBillingAccessError });
 
 	if (!error || parseBudgetError(error)) {
 		return null;
 	}
 
-	const parsed = parseError(error);
-	const requestId = parsed.requestId;
-	const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+	const requestId = parsed?.requestId;
 	const retry = async () => {
-		if (!lastUserMessage) {
+		if (!lastUserMessageId) {
 			return;
 		}
 
 		clearError();
-		await resendMessage({ messageId: lastUserMessage.id });
+		await resendMessage({ messageId: lastUserMessageId });
 	};
+
+	if (isBillingAccessError) {
+		return (
+			<BillingAccessError
+				access={billingAccess.data}
+				className={className}
+				isRunning={isRunning}
+				isAccessPending={billingAccess.isPending}
+				isAccessError={billingAccess.isError}
+				isAccessFetching={billingAccess.isFetching}
+				canRetry={Boolean(lastUserMessageId)}
+				onManageBilling={(organizationId) => void openOrganizationBilling(organizationId)}
+				onRetryAccess={() => void billingAccess.refetch()}
+				onRetry={() => void retry()}
+			/>
+		);
+	}
 
 	return (
 		<div className={cn('flex items-start gap-2.5 px-4 py-3 text-red-500', className)}>
 			<AlertCircleIcon className='size-4 shrink-0 mt-1' />
 
 			<div className='flex-1 min-w-0 text-sm wrap-break-word'>
-				{parsed.error && <span className='font-medium'>{parsed.error}</span>}
-				{parsed.message && <p className='text-red-400 mt leading-relaxed'>{parsed.message}</p>}
+				{parsed?.error && <span className='font-medium'>{parsed.error}</span>}
+				{parsed?.message && <p className='text-red-400 mt leading-relaxed'>{parsed.message}</p>}
 				{requestId && (
 					<div className='mt-2 flex items-center gap-1 text-xs text-muted-foreground'>
 						<span>Provider request ID:</span>
@@ -85,7 +109,7 @@ export function ChatError({ className }: Props) {
 						</Button>
 					</div>
 				)}
-				{lastUserMessage && (
+				{lastUserMessageId && (
 					<Button
 						variant='outline'
 						size='sm'
@@ -102,4 +126,78 @@ export function ChatError({ className }: Props) {
 			</div>
 		</div>
 	);
+}
+
+function BillingAccessError({
+	access,
+	className,
+	isRunning,
+	isAccessPending,
+	isAccessError,
+	isAccessFetching,
+	canRetry,
+	onManageBilling,
+	onRetryAccess,
+	onRetry,
+}: {
+	access:
+		| {
+				organizationId: string;
+				canManageBilling: boolean;
+				trialAvailable: boolean;
+		  }
+		| undefined;
+	className?: string;
+	isRunning: boolean;
+	isAccessPending: boolean;
+	isAccessError: boolean;
+	isAccessFetching: boolean;
+	canRetry: boolean;
+	onManageBilling: (organizationId: string) => void;
+	onRetryAccess: () => void;
+	onRetry: () => void;
+}) {
+	return (
+		<Callout icon={CreditCardIcon} className={cn('px-4 py-3 text-sm', className)} role='status'>
+			<p className='font-medium text-foreground'>A subscription is needed to continue chatting.</p>
+			<p className='mt-1 text-muted-foreground'>
+				{isAccessPending
+					? 'Loading billing details...'
+					: isAccessError
+						? 'Billing details could not be loaded.'
+						: access?.trialAvailable
+							? access.canManageBilling
+								? 'Start your free trial, then retry your message.'
+								: 'Ask an organization admin to start the free trial, then retry your message.'
+							: 'Manage your subscription, then retry your message.'}
+			</p>
+			<div className='mt-3 flex flex-wrap gap-2'>
+				{access?.canManageBilling && (
+					<Button size='sm' onClick={() => onManageBilling(access.organizationId)}>
+						Manage billing
+					</Button>
+				)}
+				{isAccessError && (
+					<Button size='sm' disabled={isAccessFetching} onClick={onRetryAccess}>
+						<RotateCcwIcon />
+						Retry billing details
+					</Button>
+				)}
+				{canRetry && (
+					<Button variant='secondary' size='sm' disabled={isRunning} onClick={onRetry}>
+						<RotateCcwIcon />
+						Retry
+					</Button>
+				)}
+			</div>
+			{access && !access.canManageBilling && (
+				<p className='mt-2 text-xs text-muted-foreground'>Ask an organization admin to manage billing.</p>
+			)}
+		</Callout>
+	);
+}
+
+function findLastUserMessageId(messages: UIMessage[]): string | undefined {
+	const lastUserMessageIndex = getLastUserMessageIdx(messages);
+	return lastUserMessageIndex !== undefined ? messages[lastUserMessageIndex].id : undefined;
 }

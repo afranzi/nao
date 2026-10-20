@@ -21,8 +21,8 @@ import { SimpleTooltip } from '@/components/ui/tooltip';
 import { useTimeAgo } from '@/hooks/use-time-ago';
 import { editedMessageIdStore } from '@/stores/chat-edited-message';
 import { trpc } from '@/main';
-import { STORY_MENTION_ID } from '@/components/chat-input-prompt';
-import StoryIcon from '@/components/ui/story-icon';
+import { customStoryMentionOption, storyMentionOption } from '@/components/chat-input-prompt';
+import DiscordIcon from '@/components/icons/discord.svg';
 import MattermostIcon from '@/components/icons/mattermost.svg';
 import SlackIcon from '@/components/icons/slack.svg';
 import TeamsIcon from '@/components/icons/microsoft-teams.svg';
@@ -55,6 +55,7 @@ const MESSAGE_SOURCES = {
 	teams: { icon: <TeamsIcon className='size-4' />, label: 'sent in Teams' },
 	telegram: { icon: <TelegramIcon className='size-4' />, label: 'sent in Telegram' },
 	mattermost: { icon: <MattermostIcon className='size-4' />, label: 'sent in Mattermost' },
+	discord: { icon: <DiscordIcon className='size-4' />, label: 'sent in Discord' },
 	whatsapp: { icon: <WhatsAppIcon className='size-4' />, label: 'sent in WhatsApp' },
 	mcp: { icon: <McpIcon className='size-4' />, label: 'sent via MCP' },
 } as const;
@@ -89,9 +90,7 @@ function useMentionConfigs(): MessageMentionConfig[] {
 			label: skill.name,
 		}));
 
-		const storyOptions: MentionOption[] = [
-			{ id: STORY_MENTION_ID, label: 'Story mode', icon: <StoryIcon className='size-4' strokeWidth={2.25} /> },
-		];
+		const storyOptions: MentionOption[] = [storyMentionOption, customStoryMentionOption];
 
 		return [
 			{ trigger: '@', options: dbOptions },
@@ -121,6 +120,7 @@ export const UserMessageBubble = memo(({ message }: { message: UIMessage }) => {
 					end={citation.end}
 					text={citation.text}
 					storySlug={citation.storySlug}
+					block={'block' in citation ? citation.block : undefined}
 				/>
 			)}
 			{images.length > 0 && (

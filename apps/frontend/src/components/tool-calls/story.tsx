@@ -4,16 +4,28 @@ import { useEffect, useRef } from 'react';
 
 import { extractStorySummary } from '../../../../backend/src/utils/story-summary';
 import { StoryThumbnail } from '../story-thumbnail';
+import { CustomStoryThumbnail } from '../custom-story-thumbnail';
 import { Skeleton } from '../ui/skeleton';
 import { TextShimmer } from '../ui/text-shimmer';
 import { Button } from '../ui/button';
 import type { ToolCallComponentProps } from '.';
-import { trpc } from '@/main';
+import type { QueryDataMap } from '@/components/story-embeds';
 import { StoryViewer } from '@/components/side-panel/story-viewer';
+import { useStoryThemeForCurrentMode } from '@/components/story-theme-provider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidePanel } from '@/contexts/side-panel';
 import { useChatId } from '@/hooks/use-chat-id';
 import { useTimeAgo } from '@/hooks/use-time-ago';
+import { trpc } from '@/main';
+
+const STORY_ACTION_LABELS = {
+	create: { pending: 'Creating...', done: 'Created' },
+	update: { pending: 'Updating...', done: 'Updated' },
+	replace: { pending: 'Replacing...', done: 'Replaced' },
+	publish: { pending: 'Publishing...', done: 'Published' },
+	delete_files: { pending: 'Deleting files...', done: 'Deleted draft files' },
+	revert: { pending: 'Reverting draft...', done: 'Reverted draft' },
+} as const;
 
 export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => {
 	const { open: openSidePanel, isVisible, currentStorySlug, chatId: sidePanelChatId } = useSidePanel();
@@ -22,12 +34,14 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 	const input = toolPart.input;
 	const isStreaming = toolPart.state === 'input-streaming';
 	const output = toolPart.output;
-	const summary = extractStorySummary(output?.code ?? '');
 	const hasAutoOpenedRef = useRef(false);
 
 	const finalStorySlug = output?.id ?? input?.id;
 	const canOpen = Boolean(chatId && finalStorySlug);
-	const isCreateAction = input?.action === 'create';
+	const isCreateAction = input?.action === 'create' && isClassicCreate(input);
+	const mountedBeforeOutputRef = useRef(toolPart.state !== 'output-available' && toolPart.state !== 'output-error');
+	const isCustomPublished =
+		mountedBeforeOutputRef.current && output?.format === 'custom' && output.success && input?.action === 'publish';
 
 	const isInInteractiveContext = Boolean(contextOrUrlChatId);
 
@@ -38,9 +52,12 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 		}),
 		enabled: !isStreaming && canOpen,
 	});
+	const summary = extractStorySummary(latestStory?.code ?? output?.code ?? '');
+	const storyTheme = useStoryThemeForCurrentMode(latestStory?.theme);
 
 	useEffect(() => {
-		if (hasAutoOpenedRef.current || !isCreateAction || !isStreaming || !canOpen || !chatId || !finalStorySlug) {
+		const shouldAutoOpen = (isCreateAction && isStreaming) || isCustomPublished;
+		if (hasAutoOpenedRef.current || !shouldAutoOpen || !canOpen || !chatId || !finalStorySlug) {
 			return;
 		}
 
@@ -61,6 +78,7 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 		hasAutoOpenedRef.current = true;
 	}, [
 		isCreateAction,
+		isCustomPublished,
 		isStreaming,
 		canOpen,
 		chatId,
@@ -70,6 +88,10 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 		openSidePanel,
 		isInInteractiveContext,
 	]);
+
+	if (toolPart.state === 'output-error') {
+		return <StoryError message={toolPart.errorText ?? 'The story could not be saved.'} />;
+	}
 
 	if (!input) {
 		const partialAction = (toolPart as { input?: { action?: string } }).input?.action;
@@ -86,22 +108,15 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 	}
 
 	if (output?.error) {
-		return (
-			<div className='my-2 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400'>
-				{output.error}
-			</div>
-		);
+		return <StoryError message={output.error} />;
 	}
 
+	const isCustomStory = (latestStory?.format ?? output?.format ?? input.format) === 'custom';
 	const title = latestStory?.title ?? output?.title ?? input.title ?? input.id;
-	const actionLabel = input.action === 'create' ? 'Created' : input.action === 'update' ? 'Updated' : 'Replaced';
+	const labels = STORY_ACTION_LABELS[input.action ?? 'create'] ?? STORY_ACTION_LABELS.create;
 	const statusLabel = isStreaming
-		? input.action === 'create'
-			? 'Creating...'
-			: input.action === 'update'
-				? 'Updating...'
-				: 'Replacing...'
-		: `${actionLabel}${output?.version ? ` · v${output.version}` : ''}`;
+		? labels.pending
+		: `${labels.done}${output?.version ? ` · v${output.version}` : ''}`;
 
 	const handleOpen = () => {
 		if (!canOpen || !chatId || !finalStorySlug) {
@@ -125,7 +140,24 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 			className='group my-2 -mx-3 flex items-center gap-3 pr-3 rounded-lg border bg-background text-left transition-colors hover:bg-accent/50 disabled:opacity-50 disabled:cursor-default cursor-pointer overflow-hidden'
 		>
 			<div className='items-end relative h-16 w-30 shrink-0'>
-				<StoryThumbnail summary={summary} className='rounded-lg overflow-visible right-6' isToolPart={true} />
+				{isCustomStory ? (
+					<CustomStoryThumbnail
+						storyId={latestStory?.storyId}
+						version={latestStory?.version}
+						isToolPart={true}
+						summary={summary}
+						theme={storyTheme}
+						queryData={latestStory?.queryData as QueryDataMap | null | undefined}
+					/>
+				) : (
+					<StoryThumbnail
+						summary={summary}
+						className='rounded-lg overflow-visible right-6'
+						isToolPart={true}
+						theme={storyTheme}
+						queryData={latestStory?.queryData as QueryDataMap | null | undefined}
+					/>
+				)}
 			</div>
 
 			<div className='flex flex-col gap-1 min-w-0 flex-1 pl-5 py-3'>
@@ -149,6 +181,12 @@ export const StoryToolCall = ({ toolPart }: ToolCallComponentProps<'story'>) => 
 	);
 };
 
+function StoryError({ message }: { message: string }) {
+	return (
+		<div className='my-2 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400'>{message}</div>
+	);
+}
+
 function LiveStoryTimestamp({ cachedAt }: { cachedAt: string | Date }) {
 	const timestampMs = new Date(cachedAt).getTime();
 	const timeAgo = useTimeAgo(timestampMs);
@@ -164,4 +202,8 @@ function LiveStoryTimestamp({ cachedAt }: { cachedAt: string | Date }) {
 			<TooltipContent>Updated {new Date(cachedAt).toLocaleString()}</TooltipContent>
 		</Tooltip>
 	);
+}
+
+function isClassicCreate(input: { format?: 'classic' | 'custom'; code?: string }): boolean {
+	return input.format === 'classic' || (input.format === undefined && input.code !== undefined);
 }
