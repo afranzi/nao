@@ -22,8 +22,8 @@ export interface SkillLoadError {
 	message: string;
 }
 
-export const PRELOADED_SKILL_CHAR_LIMIT = 16_000;
-export const PRELOADED_SKILLS_TOTAL_CHAR_LIMIT = 48_000;
+export const PRELOADED_SKILL_CHAR_LIMIT = 8_000;
+export const PRELOADED_SKILLS_TOTAL_CHAR_LIMIT = 24_000;
 
 const SKILLS_FOLDER_LOCATION = '/agent/skills';
 

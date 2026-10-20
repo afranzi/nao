@@ -17,6 +17,7 @@ import {
 	parseStoredUserGroupSsoMappings,
 	type ProjectRowSecurity,
 	type ProjectSharingPermission,
+	resolvePreloadedSkills,
 	serializeProjectRowSecurity,
 	serializeUserGroupConfig,
 	serializeUserGroupContextAccess,
@@ -56,6 +57,7 @@ export interface UserGroup extends Omit<
 	featureGrants: UserGroupFeature[];
 	toolCallDensityPolicy: ToolCallDensityPolicy;
 	projectSharing: ProjectSharingPermission;
+	preloadedSkills: string[];
 	databaseAccess: DatabaseContextAccess;
 	docsAccess: DocsContextAccess;
 	filesAccess: FilesContextAccess;
@@ -80,6 +82,7 @@ export interface EffectiveUserGroupAccess {
 	filesAccess: FilesContextAccess;
 	mcpAccess: McpAccess;
 	rowPolicies: UserGroupRowPolicies[];
+	preloadedSkills: string[];
 }
 
 export class UserGroupQueryError extends Error {
@@ -185,6 +188,13 @@ export const resolveUserGroupAccess = async (
 				group.contextAccess.databaseAccess,
 			),
 		),
+		preloadedSkills: resolvePreloadedSkills(
+			applicableGroups.map(({ isDefault, name, config }) => ({
+				isDefault,
+				name,
+				preloadedSkills: config.preloadedSkills,
+			})),
+		),
 	};
 };
 
@@ -244,6 +254,7 @@ export const createUserGroup = async (
 	filesAccess: FilesContextAccess = EMPTY_FILES_CONTEXT_ACCESS,
 	projectSharing: ProjectSharingPermission = 'inherit',
 	mcpAccess: McpAccess = EMPTY_MCP_ACCESS,
+	preloadedSkills: string[] = [],
 ): Promise<UserGroup> => {
 	const values = createUserGroupValues(
 		projectId,
@@ -257,6 +268,7 @@ export const createUserGroup = async (
 		filesAccess,
 		projectSharing,
 		mcpAccess,
+		preloadedSkills,
 	);
 	const group = await executeUserGroupNameMutation(async () => {
 		if (dbConfig.dialect === Dialect.Sqlite) {
@@ -292,6 +304,7 @@ export const createUserGroupWithinLimit = async (
 	filesAccess: FilesContextAccess = EMPTY_FILES_CONTEXT_ACCESS,
 	projectSharing: ProjectSharingPermission = 'inherit',
 	mcpAccess: McpAccess = EMPTY_MCP_ACCESS,
+	preloadedSkills: string[] = [],
 ): Promise<UserGroup> => {
 	const values = createUserGroupValues(
 		projectId,
@@ -305,6 +318,7 @@ export const createUserGroupWithinLimit = async (
 		filesAccess,
 		projectSharing,
 		mcpAccess,
+		preloadedSkills,
 	);
 	const group = await executeUserGroupNameMutation(() => {
 		if (dbConfig.dialect === Dialect.Sqlite) {
@@ -354,6 +368,7 @@ export const updateUserGroup = async (
 		rowPolicies?: UserGroupRowPolicies;
 		rowPoliciesRegistry?: ProjectRowSecurity;
 		projectSharing?: ProjectSharingPermission;
+		preloadedSkills?: string[];
 	},
 ): Promise<UserGroup> => {
 	const group = await getUserGroup(projectId, groupId);
@@ -388,6 +403,7 @@ export const updateUserGroup = async (
 			data.featureGrants,
 			data.toolCallDensityPolicy ?? currentConfig.toolCallDensity,
 			data.projectSharing ?? currentConfig.projectSharing,
+			data.preloadedSkills ?? currentConfig.preloadedSkills,
 		),
 		...(data.databaseAccess === undefined &&
 		data.docsAccess === undefined &&
@@ -633,12 +649,13 @@ function createUserGroupValues(
 	filesAccess: FilesContextAccess = EMPTY_FILES_CONTEXT_ACCESS,
 	projectSharing: ProjectSharingPermission = 'inherit',
 	mcpAccess: McpAccess = EMPTY_MCP_ACCESS,
+	preloadedSkills: string[] = [],
 ): NewUserGroup {
 	const filteredRowPolicies = filterUserGroupRowPoliciesByDatabaseContext(rowPolicies, databaseAccess);
 	return {
 		projectId,
 		name,
-		featureGrants: serializeUserGroupConfig(featureGrants, toolCallDensityPolicy, projectSharing),
+		featureGrants: serializeUserGroupConfig(featureGrants, toolCallDensityPolicy, projectSharing, preloadedSkills),
 		contextGrants: serializeUserGroupContextAccess({ databaseAccess, docsAccess, filesAccess, mcpAccess }),
 		ssoMappings: serializeUserGroupSsoMappings(ssoMappings),
 		rowPolicies: serializeUserGroupRowPolicies(filteredRowPolicies),
@@ -772,6 +789,7 @@ function normalizeUserGroup(group: DBUserGroup): UserGroup {
 		featureGrants: config.features,
 		toolCallDensityPolicy: config.toolCallDensity,
 		projectSharing: config.projectSharing,
+		preloadedSkills: config.preloadedSkills,
 		databaseAccess: contextAccess.databaseAccess,
 		docsAccess: contextAccess.docsAccess,
 		filesAccess: contextAccess.filesAccess,

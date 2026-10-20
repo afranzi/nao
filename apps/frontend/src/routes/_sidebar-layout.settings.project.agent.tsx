@@ -13,7 +13,6 @@ import { LlmProvidersSection } from '@/components/settings/llm-providers-section
 import { SavedPrompts } from '@/components/settings/saved-prompts';
 import { SettingsSandboxSecrets } from '@/components/settings/sandbox-secrets';
 import { SettingsDisplayMap } from '@/components/settings/display-map';
-import { SettingsPreloadedSkills } from '@/components/settings/preloaded-skills';
 import { SettingsProjectMemory } from '@/components/settings/project-memory';
 import { SettingsSemanticLayer } from '@/components/settings/semantic-layer';
 import { SettingsTranscribe } from '@/components/settings/settings-transcribe';
@@ -123,7 +122,6 @@ function ToolsSettings({ isAdmin }: { isAdmin: boolean }) {
 		<>
 			<SettingsWebSearch isAdmin={isAdmin} />
 			<SavedPrompts isAdmin={isAdmin} />
-			<SettingsPreloadedSkills isAdmin={isAdmin} />
 			{isAdmin && <SettingsProjectMemory />}
 			<SettingsDisplayMap isAdmin={isAdmin} />
 			<SettingsSemanticLayer isAdmin={isAdmin} />

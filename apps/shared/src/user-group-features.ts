@@ -1,4 +1,4 @@
-import type { ToolCallDensity } from './types';
+import { MAX_PRELOADED_SKILLS, type ToolCallDensity } from './types';
 
 export const USER_GROUP_FEATURES = ['storyCreation', 'customStoryCreation', 'automationCreation'] as const;
 
@@ -17,6 +17,7 @@ export interface UserGroupConfig {
 	features: UserGroupFeature[];
 	toolCallDensity: ToolCallDensityPolicy;
 	projectSharing: ProjectSharingPermission;
+	preloadedSkills: string[];
 }
 
 export type StoredUserGroupConfig =
@@ -26,6 +27,7 @@ export type StoredUserGroupConfig =
 			features: UserGroupFeature[];
 			toolCallDensity: ToolCallDensityPolicy;
 			projectSharing?: ProjectSharingPermission;
+			preloadedSkills?: string[];
 	  };
 
 export const DEFAULT_TOOL_CALL_DENSITY_POLICY: ToolCallDensityPolicy = {
@@ -113,6 +115,24 @@ export function resolveProjectSharingPermission(
 	return !groups.some((group) => group.isDefault && group.projectSharing === 'blocked');
 }
 
+/** All Users' skills come first, then each other group's in name order, without duplicates. */
+export function resolvePreloadedSkills(
+	groups: ReadonlyArray<{ isDefault: boolean; name: string; preloadedSkills: readonly string[] }>,
+): string[] {
+	const orderedGroups = [...groups].sort(
+		(left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name),
+	);
+	return normalizePreloadedSkills(orderedGroups.flatMap((group) => group.preloadedSkills));
+}
+
+export function normalizePreloadedSkills(skillNames: readonly unknown[]): string[] {
+	const names = skillNames
+		.filter((name): name is string => typeof name === 'string')
+		.map((name) => name.trim())
+		.filter((name) => name.length > 0);
+	return [...new Set(names)].slice(0, MAX_PRELOADED_SKILLS);
+}
+
 export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 	if (Array.isArray(value)) {
 		const legacyFeatures = value.filter((feature): feature is string => typeof feature === 'string');
@@ -123,6 +143,7 @@ export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 				canChange: legacyFeatures.includes('compact-mode'),
 			},
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		};
 	}
 
@@ -131,6 +152,7 @@ export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 			features: [],
 			toolCallDensity: { defaultDensity: 'detailed', canChange: false },
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		};
 	}
 
@@ -146,6 +168,7 @@ export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 			canChange: policy.canChange === true,
 		},
 		projectSharing: parseProjectSharingPermission(value.projectSharing),
+		preloadedSkills: Array.isArray(value.preloadedSkills) ? normalizePreloadedSkills(value.preloadedSkills) : [],
 	};
 }
 
@@ -153,6 +176,7 @@ export function serializeUserGroupConfig(
 	features: readonly string[],
 	toolCallDensity: ToolCallDensityPolicy,
 	projectSharing: ProjectSharingPermission = 'inherit',
+	preloadedSkills: readonly string[] = [],
 ): StoredUserGroupConfig {
 	return {
 		version: 2,
@@ -162,6 +186,7 @@ export function serializeUserGroupConfig(
 			canChange: toolCallDensity.canChange,
 		},
 		projectSharing: parseProjectSharingPermission(projectSharing),
+		preloadedSkills: normalizePreloadedSkills(preloadedSkills),
 	};
 }
 

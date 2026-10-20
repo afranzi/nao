@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
 	DEFAULT_USER_GROUP_CONFIG,
 	parseStoredUserGroupConfig,
+	resolvePreloadedSkills,
 	resolveProjectSharingPermission,
 	serializeUserGroupConfig,
 	USER_GROUP_FEATURES,
 } from './user-group-features';
+
+const DEFAULT_TOOL_CALL_DENSITY = { defaultDensity: 'detailed', canChange: true } as const;
 
 describe('user group configuration', () => {
 	it('uses canonical v2 configuration for new groups', () => {
@@ -34,6 +37,7 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		});
 		expect(USER_GROUP_FEATURES).toEqual(['storyCreation', 'customStoryCreation', 'automationCreation']);
 	});
@@ -42,6 +46,27 @@ describe('user group configuration', () => {
 		expect(serializeUserGroupConfig([], { defaultDensity: 'detailed', canChange: true }, 'blocked')).toMatchObject({
 			projectSharing: 'blocked',
 		});
+	});
+
+	it('serializes trimmed, deduplicated preloaded skills', () => {
+		expect(
+			serializeUserGroupConfig([], DEFAULT_TOOL_CALL_DENSITY, 'inherit', [' revenue ', 'churn', 'revenue', '']),
+		).toMatchObject({ preloadedSkills: ['revenue', 'churn'] });
+	});
+
+	it('reads preloaded skills and ignores invalid entries', () => {
+		expect(
+			parseStoredUserGroupConfig({
+				version: 2,
+				features: [],
+				toolCallDensity: DEFAULT_TOOL_CALL_DENSITY,
+				preloadedSkills: ['revenue', 42, ' churn '],
+			}).preloadedSkills,
+		).toEqual(['revenue', 'churn']);
+		expect(
+			parseStoredUserGroupConfig({ version: 2, features: [], toolCallDensity: DEFAULT_TOOL_CALL_DENSITY })
+				.preloadedSkills,
+		).toEqual([]);
 	});
 
 	it('reads canonical v2 configuration', () => {
@@ -62,6 +87,7 @@ describe('user group configuration', () => {
 				canChange: true,
 			},
 			projectSharing: 'allowed',
+			preloadedSkills: [],
 		});
 	});
 
@@ -84,6 +110,7 @@ describe('user group configuration', () => {
 				canChange: true,
 			},
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		});
 	});
 
@@ -95,6 +122,7 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		});
 	});
 
@@ -111,6 +139,7 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		});
 	});
 
@@ -122,7 +151,20 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			preloadedSkills: [],
 		});
+	});
+});
+
+describe('resolvePreloadedSkills', () => {
+	it('puts All Users first, then the other groups by name, without duplicates', () => {
+		expect(
+			resolvePreloadedSkills([
+				{ isDefault: false, name: 'Sales', preloadedSkills: ['pipeline', 'revenue'] },
+				{ isDefault: false, name: 'Finance', preloadedSkills: ['revenue-recognition'] },
+				{ isDefault: true, name: 'All Users', preloadedSkills: ['revenue'] },
+			]),
+		).toEqual(['revenue', 'revenue-recognition', 'pipeline']);
 	});
 });
 

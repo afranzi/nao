@@ -15,7 +15,7 @@ export default createTool<loadSkill.Input, loadSkill.Output>({
 		if (!skill) {
 			throw new Error(
 				`There is no built-in skill called '${name}'. Available: ${internalSkillNames().join(', ')}. ` +
-					'Project skills under agent/skills/ are not loaded with load_skill: read their file directly, or ask an admin to preload them in the agent settings.',
+					'Project skills under agent/skills/ are not loaded with load_skill: read their file directly, or ask an admin to preload them for a user group.',
 			);
 		}
 

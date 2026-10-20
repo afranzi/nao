@@ -295,6 +295,7 @@ async function _buildContextBase(opts: {
 		mcpAccess: contextAccess.mcpAccess,
 		userGroupFeatures: contextAccess.userGroupFeatures,
 		userRulesGroupAccess: contextAccess.userRulesGroupAccess,
+		preloadedSkillNames: contextAccess.preloadedSkillNames,
 		azureAccessToken,
 		queryResults: new Map(),
 		generatedArtifacts: { charts: [], maps: [], stories: [] },
@@ -744,7 +745,7 @@ export class AgentManager {
 		const skills = skillService.getSkills(this.chat.projectId);
 		const preloadedSkills = skillService.getPreloadedSkills(
 			this.chat.projectId,
-			this._toolContext.agentSettings?.skills?.preloaded,
+			this._toolContext.preloadedSkillNames,
 		);
 		const customCharts = this._toolContext.supportsCustomCharts
 			? listChartPlugins(this._toolContext.projectFolder)
