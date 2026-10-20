@@ -261,6 +261,7 @@ const allUsers = {
 	featureGrants: [],
 	toolCallDensityPolicy: DEFAULT_TOOL_CALL_DENSITY_POLICY,
 	projectSharing: 'inherit' as const,
+	showAllSettings: true,
 	preloadedSkills: [] as string[],
 	databaseAccess: { mode: 'all' as const, strict: false },
 	docsAccess: ALL_DOCS_CONTEXT_ACCESS,
@@ -273,6 +274,7 @@ const analysts = {
 	id: 'analysts',
 	name: 'Analysts',
 	isDefault: false,
+	showAllSettings: false,
 	databaseAccess: { ...EMPTY_DATABASE_CONTEXT_ACCESS, strict: false },
 	docsAccess: EMPTY_DOCS_CONTEXT_ACCESS,
 	filesAccess: EMPTY_FILES_CONTEXT_ACCESS,
@@ -946,6 +948,7 @@ describe('UserGroupEditor', () => {
 			'Skills',
 			'Security',
 			'Budget',
+			'Advanced settings',
 		]);
 		expect(screen.getByRole('tab', { name: 'Features' }).getAttribute('aria-selected')).toBe('true');
 		expect(screen.getByRole('heading', { name: 'Allowed features' })).toBeTruthy();
@@ -1745,6 +1748,21 @@ describe('UserGroupEditor', () => {
 				databaseAccess: { mode: 'restricted', strict: true, grants: [], patterns: [] },
 			}),
 		);
+	});
+
+	it('tracks, restores, and saves the settings visibility', () => {
+		renderEditor('advanced');
+		const showAllSettings = () => screen.getByRole('switch', { name: 'Show all settings to users' });
+
+		fireEvent.click(showAllSettings());
+		expect(showAllSettings().getAttribute('aria-checked')).toBe('true');
+
+		fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+		expect(showAllSettings().getAttribute('aria-checked')).toBe('false');
+
+		fireEvent.click(showAllSettings());
+		fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+		expect(mocks.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ showAllSettings: true }));
 	});
 
 	it.each([

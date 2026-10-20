@@ -468,7 +468,7 @@ const defaultUserGroupValues = (projectId: string) => ({
 	projectId,
 	name: DEFAULT_USER_GROUP_NAME,
 	isDefault: true,
-	featureGrants: serializeUserGroupConfig(USER_GROUP_FEATURES, DEFAULT_TOOL_CALL_DENSITY_POLICY),
+	featureGrants: serializeUserGroupConfig(USER_GROUP_FEATURES, DEFAULT_TOOL_CALL_DENSITY_POLICY, 'inherit', true),
 	contextGrants: serializeUserGroupContextAccess({
 		databaseAccess: ALL_DATABASE_CONTEXT_ACCESS,
 		docsAccess: ALL_DOCS_CONTEXT_ACCESS,

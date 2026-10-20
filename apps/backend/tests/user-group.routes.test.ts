@@ -716,6 +716,7 @@ describe('user group routes', () => {
 			EMPTY_FILES_CONTEXT_ACCESS,
 			'inherit',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 	});
@@ -740,6 +741,7 @@ describe('user group routes', () => {
 			EMPTY_FILES_CONTEXT_ACCESS,
 			'inherit',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 		expect(mocks.createUserGroup).not.toHaveBeenCalled();
@@ -800,6 +802,7 @@ describe('user group routes', () => {
 			EMPTY_FILES_CONTEXT_ACCESS,
 			'inherit',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 	});
@@ -851,6 +854,7 @@ describe('user group routes', () => {
 			EMPTY_FILES_CONTEXT_ACCESS,
 			'inherit',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 	});
@@ -878,6 +882,7 @@ describe('user group routes', () => {
 			EMPTY_FILES_CONTEXT_ACCESS,
 			'inherit',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 	});
@@ -961,6 +966,7 @@ describe('user group routes', () => {
 			EMPTY_FILES_CONTEXT_ACCESS,
 			'inherit',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 	});
@@ -1078,6 +1084,7 @@ describe('user group routes', () => {
 			expect.anything(),
 			'blocked',
 			EMPTY_MCP_ACCESS,
+			false,
 			[],
 		);
 	});
@@ -1234,6 +1241,7 @@ describe('user group routes', () => {
 				defaultDensity: 'compact',
 				canChange: false,
 			},
+			canSeeAdvancedSettings: false,
 			databaseAccess: { mode: 'restricted', strict: false, grants: [], patterns: [] },
 			docsAccess: { mode: 'restricted', grants: [] },
 		});
@@ -1251,6 +1259,7 @@ describe('user group routes', () => {
 				defaultDensity: 'compact',
 				canChange: false,
 			},
+			canSeeAdvancedSettings: false,
 			databaseAccess: { mode: 'restricted', strict: false, grants: [], patterns: [] },
 			docsAccess: { mode: 'restricted', grants: [] },
 			rowPolicies: [{ version: 1, policies: [] }],
@@ -1297,6 +1306,7 @@ describe('user group routes', () => {
 				defaultDensity: 'compact',
 				canChange: false,
 			},
+			canSeeAdvancedSettings: false,
 			databaseAccess: { mode: 'restricted', strict: false, grants: [], patterns: [] },
 			docsAccess: { mode: 'restricted', grants: [] },
 		});

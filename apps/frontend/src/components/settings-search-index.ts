@@ -1008,7 +1008,8 @@ export const settingsSearchIndex: SettingsSearchEntry[] = [
 		section: 'Manage Groups',
 		search: { tab: 'groups' },
 		title: 'Manage Groups',
-		description: 'Configure which features, database tables, docs, MCP servers, and budget each group can use.',
+		description:
+			'Configure which features, database tables, docs, MCP servers, budget, and settings each group can use.',
 		keywords: [
 			'groups',
 			'permissions',
@@ -1025,6 +1026,11 @@ export const settingsSearchIndex: SettingsSearchEntry[] = [
 			'automations',
 			'budget',
 			'group budget',
+			'advanced settings',
+			'settings access',
+			'show all settings',
+			'chat only',
+			'account only',
 		],
 		adminOnly: true,
 	},

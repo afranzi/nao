@@ -1,4 +1,4 @@
-import { MAX_PRELOADED_SKILLS, type ToolCallDensity } from './types';
+import { MAX_PRELOADED_SKILLS, type ToolCallDensity, type UserRole } from './types';
 
 export const USER_GROUP_FEATURES = ['storyCreation', 'customStoryCreation', 'automationCreation'] as const;
 
@@ -16,6 +16,7 @@ export interface ToolCallDensityPolicy {
 export interface UserGroupConfig {
 	features: UserGroupFeature[];
 	toolCallDensity: ToolCallDensityPolicy;
+	showAllSettings: boolean;
 	projectSharing: ProjectSharingPermission;
 	preloadedSkills: string[];
 }
@@ -26,6 +27,7 @@ export type StoredUserGroupConfig =
 			version: 2;
 			features: UserGroupFeature[];
 			toolCallDensity: ToolCallDensityPolicy;
+			showAllSettings?: boolean;
 			projectSharing?: ProjectSharingPermission;
 			preloadedSkills?: string[];
 	  };
@@ -101,6 +103,22 @@ export function normalizeUserGroupFeatures(features: readonly string[]): UserGro
 	];
 }
 
+/**
+ * Advanced settings are every settings page beyond the user's own account. Only the User role depends
+ * on its groups: admins and context admins always see them, viewers never do.
+ */
+export function canRoleSeeAdvancedSettings(role: UserRole | null | undefined, groupsShowAllSettings: boolean): boolean {
+	switch (role) {
+		case 'admin':
+		case 'context_admin':
+			return true;
+		case 'user':
+			return groupsShowAllSettings;
+		default:
+			return false;
+	}
+}
+
 /** An explicit block on any of the user's groups wins over an explicit allow, which wins over the All Users default. */
 export function resolveProjectSharingPermission(
 	groups: ReadonlyArray<{ isDefault: boolean; projectSharing: ProjectSharingPermission }>,
@@ -133,7 +151,8 @@ export function normalizePreloadedSkills(skillNames: readonly unknown[]): string
 	return [...new Set(names)].slice(0, MAX_PRELOADED_SKILLS);
 }
 
-export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
+/** Groups saved before the setting existed keep the previous behavior: All Users shows every settings page. */
+export function parseStoredUserGroupConfig(value: unknown, isDefault = false): UserGroupConfig {
 	if (Array.isArray(value)) {
 		const legacyFeatures = value.filter((feature): feature is string => typeof feature === 'string');
 		return {
@@ -143,6 +162,7 @@ export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 				canChange: legacyFeatures.includes('compact-mode'),
 			},
 			projectSharing: 'inherit',
+			showAllSettings: isDefault,
 			preloadedSkills: [],
 		};
 	}
@@ -152,6 +172,7 @@ export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 			features: [],
 			toolCallDensity: { defaultDensity: 'detailed', canChange: false },
 			projectSharing: 'inherit',
+			showAllSettings: isDefault,
 			preloadedSkills: [],
 		};
 	}
@@ -168,6 +189,7 @@ export function parseStoredUserGroupConfig(value: unknown): UserGroupConfig {
 			canChange: policy.canChange === true,
 		},
 		projectSharing: parseProjectSharingPermission(value.projectSharing),
+		showAllSettings: typeof value.showAllSettings === 'boolean' ? value.showAllSettings : isDefault,
 		preloadedSkills: Array.isArray(value.preloadedSkills) ? normalizePreloadedSkills(value.preloadedSkills) : [],
 	};
 }
@@ -176,6 +198,7 @@ export function serializeUserGroupConfig(
 	features: readonly string[],
 	toolCallDensity: ToolCallDensityPolicy,
 	projectSharing: ProjectSharingPermission = 'inherit',
+	showAllSettings = false,
 	preloadedSkills: readonly string[] = [],
 ): StoredUserGroupConfig {
 	return {
@@ -186,6 +209,7 @@ export function serializeUserGroupConfig(
 			canChange: toolCallDensity.canChange,
 		},
 		projectSharing: parseProjectSharingPermission(projectSharing),
+		showAllSettings,
 		preloadedSkills: normalizePreloadedSkills(preloadedSkills),
 	};
 }

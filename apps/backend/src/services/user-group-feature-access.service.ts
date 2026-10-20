@@ -1,4 +1,5 @@
 import {
+	canRoleSeeAdvancedSettings,
 	type DatabaseContextAccess,
 	type DocsContextAccess,
 	type FilesContextAccess,
@@ -8,6 +9,7 @@ import {
 	type UserGroupFeature,
 	type UserGroupRowPolicies,
 } from '@nao/shared';
+import type { UserRole } from '@nao/shared/types';
 
 import { env } from '../env';
 import { HandlerError } from '../utils/error';
@@ -23,6 +25,7 @@ export interface AgentUserGroupAccess {
 export interface EffectiveUserGroupAccess {
 	features: UserGroupFeatureFlags;
 	toolCallDensityPolicy: ToolCallDensityPolicy;
+	canSeeAdvancedSettings: boolean;
 	databaseAccess: DatabaseContextAccess;
 	docsAccess: DocsContextAccess;
 	filesAccess: FilesContextAccess;
@@ -43,18 +46,20 @@ export class UserGroupFeatureAccessError extends HandlerError {
 export async function getEffectiveUserGroupAccess(
 	projectId: string,
 	userId: string,
+	role: UserRole | null,
 ): Promise<EffectiveUserGroupAccess> {
 	const access = await resolveAvailableUserGroupAccess(projectId, userId);
-	return formatEffectiveUserGroupAccess(access);
+	return formatEffectiveUserGroupAccess(access, role);
 }
 
 export async function getEffectiveUserGroupAccessForUserDetail(
 	projectId: string,
 	userId: string,
+	role: UserRole | null,
 ): Promise<EffectiveUserGroupAccessForUserDetail> {
 	const access = await resolveAvailableUserGroupAccess(projectId, userId);
 	return {
-		...formatEffectiveUserGroupAccess(access),
+		...formatEffectiveUserGroupAccess(access, role),
 		rowPolicies: access.rowPolicies,
 	};
 }
@@ -63,7 +68,17 @@ export async function getEffectiveUserGroupFeatureFlags(
 	projectId: string,
 	userId: string,
 ): Promise<UserGroupFeatureFlags> {
-	return (await getEffectiveUserGroupAccess(projectId, userId)).features;
+	const access = await resolveAvailableUserGroupAccess(projectId, userId);
+	return createUserGroupFeatureFlags(access.features);
+}
+
+export async function canSeeAdvancedSettings(
+	projectId: string,
+	userId: string,
+	role: UserRole | null,
+): Promise<boolean> {
+	const access = await resolveAvailableUserGroupAccess(projectId, userId);
+	return canRoleSeeAdvancedSettings(role, access.showAllSettings);
 }
 
 export async function hasUserGroupFeature(
@@ -125,10 +140,12 @@ export function appendAgentUserGroupRestrictions(systemPrompt: string, access: A
 
 function formatEffectiveUserGroupAccess(
 	access: Awaited<ReturnType<typeof resolveAvailableUserGroupAccess>>,
+	role: UserRole | null,
 ): EffectiveUserGroupAccess {
 	return {
 		features: createUserGroupFeatureFlags(access.features),
 		toolCallDensityPolicy: access.toolCallDensityPolicy,
+		canSeeAdvancedSettings: canRoleSeeAdvancedSettings(role, access.showAllSettings),
 		databaseAccess: access.databaseAccess,
 		docsAccess: access.docsAccess,
 		filesAccess: access.filesAccess,

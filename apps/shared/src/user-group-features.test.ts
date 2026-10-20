@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	canRoleSeeAdvancedSettings,
+	DEFAULT_TOOL_CALL_DENSITY_POLICY,
 	DEFAULT_USER_GROUP_CONFIG,
 	parseStoredUserGroupConfig,
 	resolvePreloadedSkills,
@@ -8,8 +10,6 @@ import {
 	serializeUserGroupConfig,
 	USER_GROUP_FEATURES,
 } from './user-group-features';
-
-const DEFAULT_TOOL_CALL_DENSITY = { defaultDensity: 'detailed', canChange: true } as const;
 
 describe('user group configuration', () => {
 	it('uses canonical v2 configuration for new groups', () => {
@@ -25,10 +25,15 @@ describe('user group configuration', () => {
 
 	it('serializes canonical v2 configuration without compact-mode', () => {
 		expect(
-			serializeUserGroupConfig(['storyCreation', 'automationCreation', 'compact-mode'], {
-				defaultDensity: 'compact',
-				canChange: false,
-			}),
+			serializeUserGroupConfig(
+				['storyCreation', 'automationCreation', 'compact-mode'],
+				{
+					defaultDensity: 'compact',
+					canChange: false,
+				},
+				'inherit',
+				true,
+			),
 		).toEqual({
 			version: 2,
 			features: ['storyCreation', 'automationCreation'],
@@ -37,6 +42,7 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			showAllSettings: true,
 			preloadedSkills: [],
 		});
 		expect(USER_GROUP_FEATURES).toEqual(['storyCreation', 'customStoryCreation', 'automationCreation']);
@@ -50,7 +56,12 @@ describe('user group configuration', () => {
 
 	it('serializes trimmed, deduplicated preloaded skills', () => {
 		expect(
-			serializeUserGroupConfig([], DEFAULT_TOOL_CALL_DENSITY, 'inherit', [' revenue ', 'churn', 'revenue', '']),
+			serializeUserGroupConfig([], DEFAULT_TOOL_CALL_DENSITY_POLICY, 'inherit', false, [
+				' revenue ',
+				'churn',
+				'revenue',
+				'',
+			]),
 		).toMatchObject({ preloadedSkills: ['revenue', 'churn'] });
 	});
 
@@ -59,12 +70,12 @@ describe('user group configuration', () => {
 			parseStoredUserGroupConfig({
 				version: 2,
 				features: [],
-				toolCallDensity: DEFAULT_TOOL_CALL_DENSITY,
+				toolCallDensity: DEFAULT_TOOL_CALL_DENSITY_POLICY,
 				preloadedSkills: ['revenue', 42, ' churn '],
 			}).preloadedSkills,
 		).toEqual(['revenue', 'churn']);
 		expect(
-			parseStoredUserGroupConfig({ version: 2, features: [], toolCallDensity: DEFAULT_TOOL_CALL_DENSITY })
+			parseStoredUserGroupConfig({ version: 2, features: [], toolCallDensity: DEFAULT_TOOL_CALL_DENSITY_POLICY })
 				.preloadedSkills,
 		).toEqual([]);
 	});
@@ -79,6 +90,7 @@ describe('user group configuration', () => {
 					canChange: true,
 				},
 				projectSharing: 'allowed',
+				showAllSettings: true,
 			}),
 		).toEqual({
 			features: ['storyCreation', 'automationCreation'],
@@ -87,8 +99,39 @@ describe('user group configuration', () => {
 				canChange: true,
 			},
 			projectSharing: 'allowed',
+			showAllSettings: true,
 			preloadedSkills: [],
 		});
+	});
+
+	it('shows all settings to All Users and hides them for custom groups until configured', () => {
+		const storedBeforeSettingExisted = {
+			version: 2,
+			features: [],
+			toolCallDensity: DEFAULT_TOOL_CALL_DENSITY_POLICY,
+		};
+
+		expect(parseStoredUserGroupConfig(storedBeforeSettingExisted, true).showAllSettings).toBe(true);
+		expect(parseStoredUserGroupConfig(storedBeforeSettingExisted, false).showAllSettings).toBe(false);
+		expect(parseStoredUserGroupConfig(['story-creation'], true).showAllSettings).toBe(true);
+	});
+
+	it('keeps the saved settings visibility over the group default', () => {
+		const hidden = {
+			version: 2,
+			features: [],
+			toolCallDensity: DEFAULT_TOOL_CALL_DENSITY_POLICY,
+			showAllSettings: false,
+		};
+		const shown = {
+			version: 2,
+			features: [],
+			toolCallDensity: DEFAULT_TOOL_CALL_DENSITY_POLICY,
+			showAllSettings: true,
+		};
+
+		expect(parseStoredUserGroupConfig(hidden, true).showAllSettings).toBe(false);
+		expect(parseStoredUserGroupConfig(shown, false).showAllSettings).toBe(true);
 	});
 
 	it('inherits project sharing when the stored permission is missing or unknown', () => {
@@ -110,6 +153,7 @@ describe('user group configuration', () => {
 				canChange: true,
 			},
 			projectSharing: 'inherit',
+			showAllSettings: false,
 			preloadedSkills: [],
 		});
 	});
@@ -122,6 +166,7 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			showAllSettings: false,
 			preloadedSkills: [],
 		});
 	});
@@ -139,6 +184,7 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			showAllSettings: false,
 			preloadedSkills: [],
 		});
 	});
@@ -151,8 +197,27 @@ describe('user group configuration', () => {
 				canChange: false,
 			},
 			projectSharing: 'inherit',
+			showAllSettings: false,
 			preloadedSkills: [],
 		});
+	});
+});
+
+describe('canRoleSeeAdvancedSettings', () => {
+	it('follows the groups only for the User role', () => {
+		expect(canRoleSeeAdvancedSettings('user', true)).toBe(true);
+		expect(canRoleSeeAdvancedSettings('user', false)).toBe(false);
+	});
+
+	it('always shows advanced settings to admins and context admins', () => {
+		expect(canRoleSeeAdvancedSettings('admin', false)).toBe(true);
+		expect(canRoleSeeAdvancedSettings('context_admin', false)).toBe(true);
+	});
+
+	it('never shows advanced settings to viewers or users without a role', () => {
+		expect(canRoleSeeAdvancedSettings('viewer', true)).toBe(false);
+		expect(canRoleSeeAdvancedSettings(null, true)).toBe(false);
+		expect(canRoleSeeAdvancedSettings(undefined, true)).toBe(false);
 	});
 });
 
