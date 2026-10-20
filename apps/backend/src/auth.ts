@@ -15,6 +15,7 @@ import type { JWTPayload } from 'jose';
 import { db } from './db/db';
 import dbConfig, { Dialect } from './db/dbConfig';
 import { env, isCloud, MCP_VALID_AUDIENCES } from './env';
+import { rebaseOrigin } from './mcp/public-auth-metadata';
 import { verifyJwtWithLocalJwks } from './mcp/verify-jwt';
 import * as orgQueries from './queries/organization.queries';
 import * as projectQueries from './queries/project.queries';
@@ -85,12 +86,18 @@ export async function verifyOAuthAccessToken(token: string, audience: string[]):
 	return verifyJwtWithLocalJwks(token, { audience, issuer, keys });
 }
 
+/**
+ * RFC 9728 protected-resource metadata. `facingOrigin` is the origin the client is
+ * talking to: on the public MCP host the authorization server is advertised there too,
+ * so a client that follows discovery never needs to reach the private UI host.
+ */
 export async function buildProtectedResourceMetadata(
 	overrides: ResourceServerMetadata,
+	facingOrigin?: string,
 ): Promise<ResourceServerMetadata> {
 	const { issuer } = await getAuthServerEndpoints();
 	return {
-		authorization_servers: [issuer],
+		authorization_servers: [facingOrigin ? rebaseOrigin(issuer, facingOrigin) : issuer],
 		...overrides,
 	};
 }
