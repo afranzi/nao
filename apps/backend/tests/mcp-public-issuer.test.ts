@@ -2,11 +2,13 @@ import { exportJWK, generateKeyPair, type JWTPayload, SignJWT } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+	isAuthorizationResponse,
 	isPublicResourceFlow,
 	publicFlowMarkerId,
 	reissueJwt,
 	reissueTokenResponse,
 	rewriteRedirectIssuer,
+	sameOriginRedirectPath,
 } from '../src/mcp/public-issuer';
 import { verifyJwtWithLocalJwks } from '../src/mcp/verify-jwt';
 
@@ -52,11 +54,33 @@ describe('publicFlowMarkerId', () => {
 		expect(publicFlowMarkerId(authorize)).toBe('mcp-public-flow:client-1:challenge-1');
 	});
 
-	it('falls back to state without PKCE, and needs a client_id', () => {
-		const noPkce = new URLSearchParams({ client_id: 'client-1', state: 'state-1' });
-		expect(publicFlowMarkerId(noPkce)).toBe('mcp-public-flow:client-1:state-1');
+	it('needs both client_id and a PKCE code_challenge (no state fallback)', () => {
+		expect(publicFlowMarkerId(new URLSearchParams({ client_id: 'client-1', state: 'state-1' }))).toBeUndefined();
 		expect(publicFlowMarkerId(new URLSearchParams({ code_challenge: 'c' }))).toBeUndefined();
 		expect(publicFlowMarkerId(new URLSearchParams({ client_id: 'client-1' }))).toBeUndefined();
+	});
+});
+
+describe('sameOriginRedirectPath', () => {
+	const base = 'https://nao.internal.example/api/auth';
+
+	it('resolves relative and same-origin redirects to their path', () => {
+		expect(sameOriginRedirectPath('/consent?client_id=c', base)).toBe('/consent');
+		expect(sameOriginRedirectPath('https://nao.internal.example/login?x=1', base)).toBe('/login');
+	});
+
+	it('rejects redirects to another origin, even with a matching path', () => {
+		expect(sameOriginRedirectPath('https://claude.ai/login?code=x', base)).toBeUndefined();
+		expect(sameOriginRedirectPath('https://claude.ai/consent', base)).toBeUndefined();
+	});
+});
+
+describe('isAuthorizationResponse', () => {
+	it('detects code and error responses only', () => {
+		expect(isAuthorizationResponse('https://claude.ai/cb?code=abc&state=s')).toBe(true);
+		expect(isAuthorizationResponse('https://claude.ai/cb?error=access_denied')).toBe(true);
+		expect(isAuthorizationResponse('https://nao.internal.example/consent?client_id=c')).toBe(false);
+		expect(isAuthorizationResponse('/consent?client_id=c')).toBe(false);
 	});
 });
 
