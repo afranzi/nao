@@ -452,6 +452,8 @@ async function applyPublicIssuer(ctx: AuthEndpointContext): Promise<unknown> {
 			// on to sign in or consent (not for error redirects or unknown clients).
 			const next = sameOriginRedirectPath(redirectUrl, uiIssuer);
 			if (next === OAUTH_LOGIN_PAGE || next === OAUTH_CONSENT_PAGE) {
+				// A retried authorize request reuses the key: keep a single, fresh marker.
+				await ctx.context.internalAdapter.deleteVerificationByIdentifier(markerId);
 				await ctx.context.internalAdapter.createVerificationValue({
 					identifier: markerId,
 					value: MCP_PUBLIC_SERVER_URL,
