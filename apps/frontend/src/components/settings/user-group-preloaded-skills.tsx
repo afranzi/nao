@@ -33,11 +33,11 @@ export function UserGroupPreloadedSkills({
 	const skills = useQuery(trpc.skill.list.queryOptions());
 	const skillLoadErrors = useQuery(trpc.skill.listLoadErrors.queryOptions());
 	const discoveredSkills = skills.data ?? [];
-	const discoveredNames = new Set(discoveredSkills.map((skill) => skill.name));
-	const selectedSkills = preloadedSkills.filter((name) => discoveredNames.has(name));
+	const effectiveInheritedSkills = isDefaultGroup ? [] : inheritedSkills;
+	const effectiveSkillCount = new Set([...effectiveInheritedSkills, ...preloadedSkills]).size;
 
 	const handlePreloadChange = (skillName: string, preloaded: boolean) => {
-		const otherSkills = selectedSkills.filter((name) => name !== skillName);
+		const otherSkills = preloadedSkills.filter((name) => name !== skillName);
 		onPreloadedSkillsChange(preloaded ? [...otherSkills, skillName] : otherSkills);
 	};
 
@@ -58,9 +58,9 @@ export function UserGroupPreloadedSkills({
 						onRetry={() => void skills.refetch()}
 						skills={discoveredSkills}
 						hasLoadErrors={(skillLoadErrors.data ?? []).length > 0}
-						selectedSkills={selectedSkills}
-						inheritedSkills={isDefaultGroup ? [] : inheritedSkills}
-						isAtLimit={selectedSkills.length >= MAX_PRELOADED_SKILLS}
+						selectedSkills={preloadedSkills}
+						inheritedSkills={effectiveInheritedSkills}
+						isAtLimit={effectiveSkillCount >= MAX_PRELOADED_SKILLS}
 						onPreloadChange={handlePreloadChange}
 					/>
 					<SkillLoadErrorRows loadErrors={skillLoadErrors.data ?? []} />

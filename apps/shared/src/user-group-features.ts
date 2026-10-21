@@ -133,7 +133,11 @@ export function resolveProjectSharingPermission(
 	return !groups.some((group) => group.isDefault && group.projectSharing === 'blocked');
 }
 
-/** All Users' skills come first, then each other group's in name order, without duplicates. */
+/**
+ * All Users' skills come first, then each other group's in name order, without duplicates.
+ * The limit applies to the merged list, so the group editor counts All Users' skills against it;
+ * a member of several custom groups can still have the last groups' picks skipped once the limit is reached.
+ */
 export function resolvePreloadedSkills(
 	groups: ReadonlyArray<{ isDefault: boolean; name: string; preloadedSkills: readonly string[] }>,
 ): string[] {

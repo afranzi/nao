@@ -182,7 +182,7 @@ class SkillService {
 		} catch (error) {
 			logger.error(`Failed to load skills: ${String(error)}`, { source: 'agent' });
 			entry.skills = [];
-			entry.loadErrors = [{ location: SKILLS_FOLDER_LOCATION, message: toLoadErrorMessage(error) }];
+			entry.loadErrors = [{ location: SKILLS_FOLDER_LOCATION, message: toLoadErrorMessage(error, entry) }];
 		}
 	}
 
@@ -217,7 +217,7 @@ class SkillService {
 			};
 		} catch (error) {
 			logger.error(`Ignoring skill file ${filePath}: ${String(error)}`, { source: 'agent' });
-			return { loadError: { location, message: toLoadErrorMessage(error) } };
+			return { loadError: { location, message: toLoadErrorMessage(error, entry) } };
 		}
 	}
 
@@ -276,10 +276,27 @@ function dropDuplicateSkillNames(skills: Skill[]): Skill[] {
 	});
 }
 
-/** YAML errors append a multi-line excerpt of the file; the first line already carries the reason and position. */
-function toLoadErrorMessage(error: unknown): string {
+/**
+ * YAML errors append a multi-line excerpt of the file; the first line already carries the reason and position.
+ * Filesystem errors quote the absolute path, which project members must not see, so the project root is masked.
+ */
+function toLoadErrorMessage(error: unknown, entry: ProjectSkills): string {
 	const message = error instanceof Error ? error.message : String(error);
-	return message.split('\n')[0].trim();
+	const firstLine = message.split('\n')[0].trim();
+	return maskProjectPath(firstLine, entry.projectPath);
+}
+
+function maskProjectPath(message: string, projectPath: string): string {
+	const roots = new Set([projectPath, safeRealpath(projectPath)].filter((root) => root.length > 0));
+	return [...roots].reduce((masked, root) => masked.replaceAll(root, '<project>'), message);
+}
+
+function safeRealpath(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return '';
+	}
 }
 
 function isWithinDirectory(directory: string, target: string): boolean {

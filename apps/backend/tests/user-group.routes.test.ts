@@ -1051,7 +1051,7 @@ describe('user group routes', () => {
 			groupId: 'group-id',
 			featureGrants: [],
 			toolCallDensityPolicy: { defaultDensity: 'detailed', canChange: true },
-			preloadedSkills: ['churn'],
+			preloadedSkills: [' churn '],
 		});
 
 		expect(mocks.createUserGroup.mock.calls[0].at(-1)).toEqual(['revenue-recognition']);

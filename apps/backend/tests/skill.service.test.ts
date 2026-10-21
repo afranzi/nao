@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -201,6 +201,24 @@ describe('skillService.getPreloadedSkills', () => {
 		expect(loadError.location).toBe('/agent/skills/broken.md');
 		expect(loadError.message).toContain('line 3');
 		expect(loadError.message).not.toContain('\n');
+	});
+
+	it.skipIf(process.getuid?.() === 0)('masks the project path in filesystem load errors', async () => {
+		const root = mkdtempSync(join(tmpdir(), 'nao-preload-unreadable-'));
+		const skillsDir = join(root, 'agent', 'skills');
+		mkdirSync(skillsDir, { recursive: true });
+		const unreadablePath = join(skillsDir, 'unreadable.md');
+		writeFileSync(unreadablePath, '---\nname: unreadable\n---\n\nBody\n');
+		chmodSync(unreadablePath, 0o000);
+		createdRoots.push(root);
+		projectPaths['preload-unreadable'] = root;
+		await skillService.initializeSkills('preload-unreadable');
+
+		const [loadError] = skillService.getSkillLoadErrors('preload-unreadable');
+		expect(loadError.location).toBe('/agent/skills/unreadable.md');
+		expect(loadError.message).toContain('<project>/agent/skills/unreadable.md');
+		expect(loadError.message).not.toContain(root);
+		expect(loadError.message).not.toContain(realpathSync(root));
 	});
 
 	it('keeps only the first skill when two files resolve to the same name', async () => {
