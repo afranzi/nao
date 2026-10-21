@@ -43,12 +43,36 @@ const FLOW_MARKER_PREFIX = 'mcp-public-flow:';
 /**
  * Key that ties an authorization request to its consent step. better-auth drops `resource`
  * from the signed query it hands the consent page, so the authorize step records public-MCP
- * flows under this key (PKCE `code_challenge`, else `state`, scoped by `client_id`).
+ * flows under this key: the PKCE `code_challenge` (mandatory for these clients), scoped by
+ * `client_id`.
  */
 export function publicFlowMarkerId(params: URLSearchParams): string | undefined {
 	const clientId = params.get('client_id');
-	const flow = params.get('code_challenge') ?? params.get('state');
-	return clientId && flow ? `${FLOW_MARKER_PREFIX}${clientId}:${flow}` : undefined;
+	const codeChallenge = params.get('code_challenge');
+	return clientId && codeChallenge ? `${FLOW_MARKER_PREFIX}${clientId}:${codeChallenge}` : undefined;
+}
+
+/**
+ * Path of a redirect target on `base`'s origin (relative Locations included), or undefined
+ * when it points anywhere else.
+ */
+export function sameOriginRedirectPath(url: string, base: string): string | undefined {
+	try {
+		const target = new URL(url, base);
+		return target.origin === new URL(base).origin ? target.pathname : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Whether a redirect URL is an authorization response (carries `code` or `error`). */
+export function isAuthorizationResponse(url: string): boolean {
+	try {
+		const { searchParams } = new URL(url);
+		return searchParams.has('code') || searchParams.has('error');
+	} catch {
+		return false;
+	}
 }
 
 /** Replace the RFC 9207 `iss` of a redirect URL when it carries `fromIssuer`. */

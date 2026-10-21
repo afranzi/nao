@@ -17,10 +17,12 @@ import dbConfig, { Dialect } from './db/dbConfig';
 import { env, isCloud, isMcpPublicHost, MCP_PUBLIC_ORIGIN, MCP_PUBLIC_SERVER_URL, MCP_VALID_AUDIENCES } from './env';
 import { rebaseOrigin } from './mcp/public-auth-metadata';
 import {
+	isAuthorizationResponse,
 	isPublicResourceFlow,
 	publicFlowMarkerId,
 	reissueTokenResponse,
 	rewriteRedirectIssuer,
+	sameOriginRedirectPath,
 } from './mcp/public-issuer';
 import { verifyJwtWithLocalJwks } from './mcp/verify-jwt';
 import * as orgQueries from './queries/organization.queries';
@@ -47,6 +49,11 @@ import { memoizeUntilRejected } from './utils/memoize-until-rejected';
 import { buildUsernameAllowlist, isEmailDomainAllowed, resolveProviderId } from './utils/utils';
 
 type MetadataHandler = (request: Request) => Promise<Response>;
+
+const OAUTH_LOGIN_PAGE = '/login';
+const OAUTH_CONSENT_PAGE = '/consent';
+/** How long a public-MCP flow may take from authorize to consent. */
+const PUBLIC_FLOW_MARKER_TTL_MS = 10 * 60 * 1000;
 
 const defaultAuth = memoizeUntilRejected<Awaited<ReturnType<typeof createAuthInstance>>>(() =>
 	createAuthInstance(env.BETTER_AUTH_URL),
@@ -233,8 +240,8 @@ async function createAuthInstance(baseURL: string) {
 			bearer(),
 			jwt(),
 			oauthProvider({
-				loginPage: '/login',
-				consentPage: '/consent',
+				loginPage: OAUTH_LOGIN_PAGE,
+				consentPage: OAUTH_CONSENT_PAGE,
 				accessTokenExpiresIn: env.MCP_ACCESS_TOKEN_TTL,
 				refreshTokenExpiresIn: env.MCP_REFRESH_TOKEN_TTL,
 				allowDynamicClientRegistration: true,
@@ -438,21 +445,37 @@ async function applyPublicIssuer(ctx: AuthEndpointContext): Promise<unknown> {
 				);
 		const markerId = publicFlowMarkerId(flowParams);
 		let isPublic = isPublicResourceFlow({ resource: query.resource, oauthQuery }, MCP_PUBLIC_SERVER_URL);
+		const jsonRedirect =
+			returned && typeof returned === 'object' && 'url' in returned && typeof returned.url === 'string'
+				? returned.url
+				: undefined;
+		const redirectUrl = ctx.context.responseHeaders?.get('location') ?? jsonRedirect;
 
-		if (ctx.path === '/oauth2/authorize' && isPublic && markerId) {
-			// better-auth drops `resource` from the query it signs for the consent page;
-			// remember the flow so the consent step can still tell it targets the public host.
-			await ctx.context.internalAdapter.createVerificationValue({
-				identifier: markerId,
-				value: MCP_PUBLIC_SERVER_URL,
-				expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-			});
+		if (ctx.path === '/oauth2/authorize' && isPublic && markerId && redirectUrl) {
+			// better-auth drops `resource` from the query it signs for the login/consent pages;
+			// remember the flow so those steps can still tell it targets the public host. Only
+			// once better-auth accepted the client and redirect_uri, i.e. it is sending the user
+			// on to sign in or consent (not for error redirects or unknown clients).
+			const next = sameOriginRedirectPath(redirectUrl, uiIssuer);
+			if (next === OAUTH_LOGIN_PAGE || next === OAUTH_CONSENT_PAGE) {
+				await ctx.context.internalAdapter.createVerificationValue({
+					identifier: markerId,
+					value: MCP_PUBLIC_SERVER_URL,
+					expiresAt: new Date(Date.now() + PUBLIC_FLOW_MARKER_TTL_MS),
+				});
+			}
 		}
-		if (ctx.path === '/oauth2/consent' && !isPublic && markerId) {
-			isPublic = Boolean(await ctx.context.internalAdapter.findVerificationValue(markerId));
+		// Consent, or authorize resumed after login: both carry the signed query, without `resource`.
+		if (!isPublic && markerId && (ctx.path === '/oauth2/consent' || oauthQuery)) {
+			const marker = await ctx.context.internalAdapter.findVerificationValue(markerId);
+			isPublic = Boolean(marker && new Date(marker.expiresAt) > new Date());
 		}
 		if (!isPublic) {
 			return undefined;
+		}
+		// The flow ends with this authorization response: the marker is single-use.
+		if (markerId && redirectUrl && isAuthorizationResponse(redirectUrl)) {
+			await ctx.context.internalAdapter.deleteVerificationByIdentifier(markerId);
 		}
 		// Redirect thrown as a 302: rewrite its Location.
 		const location = ctx.context.responseHeaders?.get('location');
