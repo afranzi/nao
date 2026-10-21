@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
 	isPublicResourceFlow,
+	publicFlowMarkerId,
 	reissueJwt,
 	reissueTokenResponse,
 	rewriteRedirectIssuer,
@@ -28,6 +29,34 @@ describe('isPublicResourceFlow', () => {
 		expect(isPublicResourceFlow({ resource: 'https://nao.internal.example/mcp' }, publicMcp)).toBe(false);
 		expect(isPublicResourceFlow({}, publicMcp)).toBe(false);
 		expect(isPublicResourceFlow({ resource: publicMcp }, undefined)).toBe(false);
+	});
+});
+
+describe('publicFlowMarkerId', () => {
+	const authorize = new URLSearchParams({
+		response_type: 'code',
+		client_id: 'client-1',
+		redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+		code_challenge: 'challenge-1',
+		state: 'state-1',
+		resource: publicMcp,
+	});
+
+	it('gives the authorize request and its consent page the same key', () => {
+		// The consent page gets a signed copy of the query without `resource`.
+		const consent = new URLSearchParams(authorize);
+		consent.delete('resource');
+		consent.set('sig', 'signature');
+		consent.set('exp', '1792576110');
+		expect(publicFlowMarkerId(consent)).toBe(publicFlowMarkerId(authorize));
+		expect(publicFlowMarkerId(authorize)).toBe('mcp-public-flow:client-1:challenge-1');
+	});
+
+	it('falls back to state without PKCE, and needs a client_id', () => {
+		const noPkce = new URLSearchParams({ client_id: 'client-1', state: 'state-1' });
+		expect(publicFlowMarkerId(noPkce)).toBe('mcp-public-flow:client-1:state-1');
+		expect(publicFlowMarkerId(new URLSearchParams({ code_challenge: 'c' }))).toBeUndefined();
+		expect(publicFlowMarkerId(new URLSearchParams({ client_id: 'client-1' }))).toBeUndefined();
 	});
 });
 

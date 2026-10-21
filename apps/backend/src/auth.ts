@@ -16,7 +16,12 @@ import { db } from './db/db';
 import dbConfig, { Dialect } from './db/dbConfig';
 import { env, isCloud, isMcpPublicHost, MCP_PUBLIC_ORIGIN, MCP_PUBLIC_SERVER_URL, MCP_VALID_AUDIENCES } from './env';
 import { rebaseOrigin } from './mcp/public-auth-metadata';
-import { isPublicResourceFlow, reissueTokenResponse, rewriteRedirectIssuer } from './mcp/public-issuer';
+import {
+	isPublicResourceFlow,
+	publicFlowMarkerId,
+	reissueTokenResponse,
+	rewriteRedirectIssuer,
+} from './mcp/public-issuer';
 import { verifyJwtWithLocalJwks } from './mcp/verify-jwt';
 import * as orgQueries from './queries/organization.queries';
 import * as projectQueries from './queries/project.queries';
@@ -418,10 +423,29 @@ async function applyPublicIssuer(ctx: AuthEndpointContext): Promise<unknown> {
 
 	if (ctx.path === '/oauth2/authorize' || ctx.path === '/oauth2/consent') {
 		const body = ctx.body as { oauth_query?: unknown } | undefined;
-		const query = ctx.query as { resource?: unknown } | undefined;
-		if (
-			!isPublicResourceFlow({ resource: query?.resource, oauthQuery: body?.oauth_query }, MCP_PUBLIC_SERVER_URL)
-		) {
+		const query = (ctx.query ?? {}) as Record<string, unknown>;
+		const oauthQuery = typeof body?.oauth_query === 'string' ? body.oauth_query : undefined;
+		const flowParams = oauthQuery
+			? new URLSearchParams(oauthQuery)
+			: new URLSearchParams(
+					Object.entries(query).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+				);
+		const markerId = publicFlowMarkerId(flowParams);
+		let isPublic = isPublicResourceFlow({ resource: query.resource, oauthQuery }, MCP_PUBLIC_SERVER_URL);
+
+		if (ctx.path === '/oauth2/authorize' && isPublic && markerId) {
+			// better-auth drops `resource` from the query it signs for the consent page;
+			// remember the flow so the consent step can still tell it targets the public host.
+			await ctx.context.internalAdapter.createVerificationValue({
+				identifier: markerId,
+				value: MCP_PUBLIC_SERVER_URL,
+				expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+			});
+		}
+		if (ctx.path === '/oauth2/consent' && !isPublic && markerId) {
+			isPublic = Boolean(await ctx.context.internalAdapter.findVerificationValue(markerId));
+		}
+		if (!isPublic) {
 			return undefined;
 		}
 		// Redirect thrown as a 302: rewrite its Location.
