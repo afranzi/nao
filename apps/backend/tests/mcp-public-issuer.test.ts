@@ -123,11 +123,11 @@ describe('token re-issue', () => {
 	});
 
 	it('re-signs a UI-issued token with the public issuer and keeps every other claim', async () => {
-		const original = await sign(claims(ui));
+		const originalClaims = { ...claims(ui), jti: 'token-1', custom: { team: 'data' } };
+		const original = await sign(originalClaims);
 		const reissued = await reissueJwt(original, ui, pub, sign);
 		const payload = await verifyJwtWithLocalJwks(reissued, { audience: [publicMcp], issuer: [ui, pub], keys });
-		expect(payload.iss).toBe(pub);
-		expect(payload).toMatchObject({ sub: 'user-1', azp: 'client-1', scope: 'openid offline_access' });
+		expect(payload).toStrictEqual({ ...originalClaims, iss: pub });
 	});
 
 	it('is still rejected by a verifier that only trusts the UI issuer', async () => {
