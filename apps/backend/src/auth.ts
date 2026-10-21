@@ -8,14 +8,15 @@ import type { BetterAuthPlugin, Session } from 'better-auth';
 import { APIError, betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { createAuthMiddleware } from 'better-auth/api';
-import { jwt } from 'better-auth/plugins';
+import { jwt, signJWT } from 'better-auth/plugins';
 import { bearer } from 'better-auth/plugins/bearer';
 import type { JWTPayload } from 'jose';
 
 import { db } from './db/db';
 import dbConfig, { Dialect } from './db/dbConfig';
-import { env, isCloud, MCP_VALID_AUDIENCES } from './env';
+import { env, isCloud, isMcpPublicHost, MCP_PUBLIC_ORIGIN, MCP_PUBLIC_SERVER_URL, MCP_VALID_AUDIENCES } from './env';
 import { rebaseOrigin } from './mcp/public-auth-metadata';
+import { isPublicResourceFlow, reissueTokenResponse, rewriteRedirectIssuer } from './mcp/public-issuer';
 import { verifyJwtWithLocalJwks } from './mcp/verify-jwt';
 import * as orgQueries from './queries/organization.queries';
 import * as projectQueries from './queries/project.queries';
@@ -78,7 +79,9 @@ export async function verifyOAuthAccessToken(token: string, audience: string[]):
 	// is rejected with "no token payload". Using the in-process key set avoids the
 	// self-referential round-trip entirely.
 	const { keys } = await auth.api.getJwks();
-	return verifyJwtWithLocalJwks(token, { audience, issuer, keys });
+	// Tokens minted for the public MCP host carry the public issuer (see applyPublicIssuer).
+	const issuers = MCP_PUBLIC_ORIGIN ? [issuer, rebaseOrigin(issuer, MCP_PUBLIC_ORIGIN)] : issuer;
+	return verifyJwtWithLocalJwks(token, { audience, issuer: issuers, keys });
 }
 
 /**
@@ -253,6 +256,11 @@ async function createAuthInstance(baseURL: string) {
 		},
 		hooks: {
 			after: createAuthMiddleware(async (ctx) => {
+				const publicIssuerResponse = await applyPublicIssuer(ctx);
+				if (publicIssuerResponse !== undefined) {
+					return publicIssuerResponse;
+				}
+
 				if (ctx.path !== '/get-session' || !ctx.request) {
 					return;
 				}
@@ -386,4 +394,58 @@ async function getAuthServerEndpoints(): Promise<{ issuer: string }> {
 	const auth = await getAuth();
 	const context = await auth.$context;
 	return { issuer: context.baseURL };
+}
+
+/** Endpoint context as seen by an after-hook: the endpoint's result and response headers. */
+type AuthEndpointContext = Parameters<typeof signJWT>[0] & {
+	context: { returned?: unknown; responseHeaders?: Headers };
+};
+
+/**
+ * Per-flow issuer for the public MCP host. Discovery there advertises the public issuer,
+ * so a flow for the public MCP resource must see that issuer everywhere: in the
+ * authorization response `iss` (RFC 9207, set on the UI host after consent) and in the
+ * tokens issued on the public host. Returns a replacement response, or undefined to keep
+ * better-auth's.
+ */
+async function applyPublicIssuer(ctx: AuthEndpointContext): Promise<unknown> {
+	if (!MCP_PUBLIC_ORIGIN || !MCP_PUBLIC_SERVER_URL || !ctx.path.startsWith('/oauth2/')) {
+		return undefined;
+	}
+	const uiIssuer = ctx.context.baseURL;
+	const publicIssuer = rebaseOrigin(uiIssuer, MCP_PUBLIC_ORIGIN);
+	const returned = ctx.context.returned as unknown;
+
+	if (ctx.path === '/oauth2/authorize' || ctx.path === '/oauth2/consent') {
+		const body = ctx.body as { oauth_query?: unknown } | undefined;
+		const query = ctx.query as { resource?: unknown } | undefined;
+		if (
+			!isPublicResourceFlow({ resource: query?.resource, oauthQuery: body?.oauth_query }, MCP_PUBLIC_SERVER_URL)
+		) {
+			return undefined;
+		}
+		// Redirect thrown as a 302: rewrite its Location.
+		const location = ctx.context.responseHeaders?.get('location');
+		if (location) {
+			ctx.context.responseHeaders?.set('location', rewriteRedirectIssuer(location, uiIssuer, publicIssuer));
+		}
+		// Redirect returned as JSON to a fetch() caller (the consent page).
+		if (returned && typeof returned === 'object' && 'url' in returned && typeof returned.url === 'string') {
+			return { ...returned, url: rewriteRedirectIssuer(returned.url, uiIssuer, publicIssuer) };
+		}
+		return undefined;
+	}
+
+	if (ctx.path === '/oauth2/token') {
+		const host = ctx.headers?.get('x-forwarded-host') ?? ctx.headers?.get('host') ?? undefined;
+		if (!isMcpPublicHost(host) || !returned || typeof returned !== 'object' || !('access_token' in returned)) {
+			return undefined;
+		}
+		const options = ctx.context.options.plugins?.find((plugin) => plugin.id === 'jwt')?.options;
+		return reissueTokenResponse(returned as Record<string, unknown>, uiIssuer, publicIssuer, (payload) =>
+			signJWT(ctx, { options, payload }),
+		);
+	}
+
+	return undefined;
 }

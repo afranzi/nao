@@ -597,6 +597,8 @@ const normalizedBaseUrl = env.BETTER_AUTH_URL.replace(/\/+$/, '');
 export const MCP_SERVER_URL = `${normalizedBaseUrl}/mcp`;
 
 const normalizedMcpPublicUrl = env.MCP_PUBLIC_URL?.replace(/\/+$/, '');
+/** The public MCP origin (MCP_PUBLIC_URL without a trailing slash), when set. */
+export const MCP_PUBLIC_ORIGIN = normalizedMcpPublicUrl;
 /** The `/mcp` URL on the public host, when MCP_PUBLIC_URL is set. */
 export const MCP_PUBLIC_SERVER_URL = normalizedMcpPublicUrl ? `${normalizedMcpPublicUrl}/mcp` : undefined;
 /** OAuth resource identifiers the token endpoint accepts (RFC 8707 audiences). */
