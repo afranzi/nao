@@ -38,6 +38,19 @@ export function isPublicResourceFlow(
 	return resources.includes(publicServerUrl);
 }
 
+const FLOW_MARKER_PREFIX = 'mcp-public-flow:';
+
+/**
+ * Key that ties an authorization request to its consent step. better-auth drops `resource`
+ * from the signed query it hands the consent page, so the authorize step records public-MCP
+ * flows under this key (PKCE `code_challenge`, else `state`, scoped by `client_id`).
+ */
+export function publicFlowMarkerId(params: URLSearchParams): string | undefined {
+	const clientId = params.get('client_id');
+	const flow = params.get('code_challenge') ?? params.get('state');
+	return clientId && flow ? `${FLOW_MARKER_PREFIX}${clientId}:${flow}` : undefined;
+}
+
 /** Replace the RFC 9207 `iss` of a redirect URL when it carries `fromIssuer`. */
 export function rewriteRedirectIssuer(url: string, fromIssuer: string, toIssuer: string): string {
 	let parsed: URL;
