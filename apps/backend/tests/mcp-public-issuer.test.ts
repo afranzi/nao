@@ -7,6 +7,7 @@ import {
 	publicFlowMarkerId,
 	reissueJwt,
 	reissueTokenResponse,
+	rewriteLocationIssuer,
 	rewriteRedirectIssuer,
 	sameOriginRedirectPath,
 } from '../src/mcp/public-issuer';
@@ -99,6 +100,25 @@ describe('rewriteRedirectIssuer', () => {
 		expect(rewriteRedirectIssuer(other, ui, pub)).toBe(other);
 		expect(rewriteRedirectIssuer('https://claude.ai/cb?code=abc', ui, pub)).toBe('https://claude.ai/cb?code=abc');
 		expect(rewriteRedirectIssuer('not a url', ui, pub)).toBe('not a url');
+	});
+});
+
+describe('rewriteLocationIssuer', () => {
+	it('swaps the iss of a Location header in place', () => {
+		const headers = new Headers({
+			location: `https://claude.ai/api/mcp/auth_callback?code=abc&iss=${encodeURIComponent(ui)}`,
+			'set-cookie': 'session=1',
+		});
+		rewriteLocationIssuer(headers, ui, pub);
+		expect(new URL(headers.get('location') ?? '').searchParams.get('iss')).toBe(pub);
+		expect(headers.get('set-cookie')).toBe('session=1');
+	});
+
+	it('ignores missing headers and headers without a Location', () => {
+		const headers = new Headers({ 'content-type': 'application/json' });
+		rewriteLocationIssuer(headers, ui, pub);
+		expect(headers.has('location')).toBe(false);
+		expect(() => rewriteLocationIssuer(undefined, ui, pub)).not.toThrow();
 	});
 });
 

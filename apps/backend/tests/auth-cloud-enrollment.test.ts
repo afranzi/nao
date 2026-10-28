@@ -46,6 +46,9 @@ vi.mock('../src/env', () => ({
 		return mocks.env.NAO_MODE === 'cloud';
 	},
 	MCP_VALID_AUDIENCES: [],
+	MCP_PUBLIC_ORIGIN: undefined,
+	MCP_PUBLIC_SERVER_URL: undefined,
+	isMcpPublicHost: () => false,
 }));
 vi.mock('../src/queries/organization.queries', () => ({
 	findOrganizationByEmailDomain: mocks.findOrganizationByEmailDomain,

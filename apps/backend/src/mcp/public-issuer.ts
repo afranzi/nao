@@ -90,6 +90,14 @@ export function rewriteRedirectIssuer(url: string, fromIssuer: string, toIssuer:
 	return parsed.toString();
 }
 
+/** Apply `rewriteRedirectIssuer` to a `Location` header, in place. */
+export function rewriteLocationIssuer(headers: Headers | undefined, fromIssuer: string, toIssuer: string): void {
+	const location = headers?.get('location');
+	if (headers && location) {
+		headers.set('location', rewriteRedirectIssuer(location, fromIssuer, toIssuer));
+	}
+}
+
 type Sign = (payload: JWTPayload) => Promise<string>;
 
 /** Re-sign a JWT whose `iss` is `fromIssuer` with `toIssuer`; anything else is returned as is. */

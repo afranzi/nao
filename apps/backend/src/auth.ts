@@ -7,7 +7,7 @@ import {
 import type { BetterAuthPlugin, Session } from 'better-auth';
 import { APIError, betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { createAuthMiddleware } from 'better-auth/api';
+import { createAuthMiddleware, isAPIError } from 'better-auth/api';
 import { jwt, signJWT } from 'better-auth/plugins';
 import { bearer } from 'better-auth/plugins/bearer';
 import type { JWTPayload } from 'jose';
@@ -21,6 +21,7 @@ import {
 	isPublicResourceFlow,
 	publicFlowMarkerId,
 	reissueTokenResponse,
+	rewriteLocationIssuer,
 	rewriteRedirectIssuer,
 	sameOriginRedirectPath,
 } from './mcp/public-issuer';
@@ -533,8 +534,9 @@ async function applyPublicIssuer(ctx: AuthEndpointContext): Promise<unknown> {
 				});
 			}
 		}
-		// Consent, or authorize resumed after login: both carry the signed query, without `resource`.
-		if (!isPublic && markerId && (ctx.path === '/oauth2/consent' || oauthQuery)) {
+		// Every later step arrives without `resource`: consent, and authorize resumed after a
+		// password sign-in (with `oauth_query`) or a social sign-in callback (with neither).
+		if (!isPublic && markerId) {
 			const marker = await ctx.context.internalAdapter.findVerificationValue(markerId);
 			isPublic = Boolean(marker && new Date(marker.expiresAt) > new Date());
 		}
@@ -545,10 +547,11 @@ async function applyPublicIssuer(ctx: AuthEndpointContext): Promise<unknown> {
 		if (markerId && redirectUrl && isAuthorizationResponse(redirectUrl)) {
 			await ctx.context.internalAdapter.deleteVerificationByIdentifier(markerId);
 		}
-		// Redirect thrown as a 302: rewrite its Location.
-		const location = ctx.context.responseHeaders?.get('location');
-		if (location) {
-			ctx.context.responseHeaders?.set('location', rewriteRedirectIssuer(location, uiIssuer, publicIssuer));
+		// Redirect thrown as a 302: rewrite its Location. When authorize runs nested in a social
+		// sign-in callback, the thrown error's own headers win over responseHeaders: rewrite both.
+		rewriteLocationIssuer(ctx.context.responseHeaders, uiIssuer, publicIssuer);
+		if (isAPIError(returned) && returned.headers instanceof Headers) {
+			rewriteLocationIssuer(returned.headers, uiIssuer, publicIssuer);
 		}
 		// Redirect returned as JSON to a fetch() caller (the consent page).
 		if (returned && typeof returned === 'object' && 'url' in returned && typeof returned.url === 'string') {
