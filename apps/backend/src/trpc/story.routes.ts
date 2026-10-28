@@ -26,7 +26,6 @@ import {
 	getCustomStoryVersion,
 } from '../services/custom-story';
 import { getCustomStoryState, setCustomStoryState } from '../services/custom-story-state';
-import { SYSTEM_EXAMPLE_PROJECT_ID } from '../services/example-project';
 import { executeLiveQuery, getStoryQueryData, refreshStoryData } from '../services/live-story';
 import {
 	notifyStoryRefreshed,
@@ -1239,9 +1238,7 @@ async function filterStoriesByProjectAccess(
 }
 
 async function canAccessStoryProject(projectId: string, userId: string): Promise<boolean> {
-	return (
-		projectId === SYSTEM_EXAMPLE_PROJECT_ID || Boolean(await projectQueries.getUserRoleInProject(projectId, userId))
-	);
+	return Boolean(await projectQueries.getUserRoleInProject(projectId, userId));
 }
 
 /**

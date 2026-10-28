@@ -14,6 +14,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as EmbedRouteImport } from './routes/embed'
+import { Route as EmailVerifiedRouteImport } from './routes/email-verified'
 import { Route as DiscordLinkRouteImport } from './routes/discord-link'
 import { Route as ConsentRouteImport } from './routes/consent'
 import { Route as CliLoginRouteImport } from './routes/cli-login'
@@ -101,6 +102,11 @@ const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
 const EmbedRoute = EmbedRouteImport.update({
   id: '/embed',
   path: '/embed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailVerifiedRoute = EmailVerifiedRouteImport.update({
+  id: '/email-verified',
+  path: '/email-verified',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DiscordLinkRoute = DiscordLinkRouteImport.update({
@@ -474,6 +480,7 @@ export interface FileRoutesByFullPath {
   '/cli-login': typeof CliLoginRoute
   '/consent': typeof ConsentRoute
   '/discord-link': typeof DiscordLinkRoute
+  '/email-verified': typeof EmailVerifiedRoute
   '/embed': typeof EmbedRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -542,6 +549,7 @@ export interface FileRoutesByTo {
   '/cli-login': typeof CliLoginRoute
   '/consent': typeof ConsentRoute
   '/discord-link': typeof DiscordLinkRoute
+  '/email-verified': typeof EmailVerifiedRoute
   '/embed': typeof EmbedRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -606,6 +614,7 @@ export interface FileRoutesById {
   '/cli-login': typeof CliLoginRoute
   '/consent': typeof ConsentRoute
   '/discord-link': typeof DiscordLinkRoute
+  '/email-verified': typeof EmailVerifiedRoute
   '/embed': typeof EmbedRouteWithChildren
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -678,6 +687,7 @@ export interface FileRouteTypes {
     | '/cli-login'
     | '/consent'
     | '/discord-link'
+    | '/email-verified'
     | '/embed'
     | '/forgot-password'
     | '/login'
@@ -746,6 +756,7 @@ export interface FileRouteTypes {
     | '/cli-login'
     | '/consent'
     | '/discord-link'
+    | '/email-verified'
     | '/embed'
     | '/forgot-password'
     | '/login'
@@ -809,6 +820,7 @@ export interface FileRouteTypes {
     | '/cli-login'
     | '/consent'
     | '/discord-link'
+    | '/email-verified'
     | '/embed'
     | '/forgot-password'
     | '/login'
@@ -880,6 +892,7 @@ export interface RootRouteChildren {
   CliLoginRoute: typeof CliLoginRoute
   ConsentRoute: typeof ConsentRoute
   DiscordLinkRoute: typeof DiscordLinkRoute
+  EmailVerifiedRoute: typeof EmailVerifiedRoute
   EmbedRoute: typeof EmbedRouteWithChildren
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
@@ -922,6 +935,13 @@ declare module '@tanstack/react-router' {
       path: '/embed'
       fullPath: '/embed'
       preLoaderRoute: typeof EmbedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email-verified': {
+      id: '/email-verified'
+      path: '/email-verified'
+      fullPath: '/email-verified'
+      preLoaderRoute: typeof EmailVerifiedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/discord-link': {
@@ -1627,6 +1647,7 @@ const rootRouteChildren: RootRouteChildren = {
   CliLoginRoute: CliLoginRoute,
   ConsentRoute: ConsentRoute,
   DiscordLinkRoute: DiscordLinkRoute,
+  EmailVerifiedRoute: EmailVerifiedRoute,
   EmbedRoute: EmbedRouteWithChildren,
   ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
